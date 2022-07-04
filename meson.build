@@ -18,18 +18,36 @@ app_inc = include_directories(
 	'.',
 	)
 
-emu = executable(
-    'emu',
-    ['core.c', 
-     'disasm.c', 
-     'emu.c', 
-     'logicboard.c', 
-     'mainview.c', 
-     'memeditor.c', 
-     'opcodes.c',
-     'options.c',
-     'popups.c'],
+# Core 8051 simulation functions
+core_library = library('core',
+    ['core.c',
+     'disasm.c',
+     'opcodes.c'],
      include_directories : app_inc,
      install: true,
      dependencies: app_deps
  )
+
+# emulator build
+emu = executable(
+    'emu',
+    ['emu.c',
+     'logicboard.c',
+     'mainview.c',
+     'memeditor.c',
+     'options.c',
+     'popups.c'],
+     include_directories : app_inc,
+     install: true,
+     link_with: core_library,
+     dependencies: app_deps
+)
+
+testprog = executable(
+    'testprog',
+    ['testcase.c'],
+    include_directories : app_inc,
+         install: true,
+         link_with: core_library,
+         dependencies: app_deps
+)
