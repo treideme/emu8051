@@ -1,3 +1,9 @@
+Please see [here](https://www.reidemeister.com/?p=449) for modifications to the original simulator.
+
+----
+Original Documentation
+======================
+
 emu8051
 =======
 
