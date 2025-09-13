@@ -10,10 +10,11 @@
  * iterating on a device model itself.
  *
  * Usage: sim_test <hexfile> <instructions> [lcd] [digits=N] [adc=VALUE]
- *                 [ds1302=SS,MM,HH,DD,MO,WD,YY]
+ *                 [ds1302=SS,MM,HH,DD,MO,WD,YY] [clock_hz=N]
  *   e.g. sim_test 18_lcd_name_id.hex 500000 lcd
  *        sim_test 17_digit_tube_student_id.hex 200000 digits=8
  *        sim_test 3432_clock_digit_tube_2.hex 500000 digits=8 ds1302=30,15,9,14,9,7,25
+ *        sim_test 344_clock_lcd.hex 500000 lcd ds1302=0,0,0,1,1,1,25 clock_hz=10000000
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,7 @@ int main(int argc, char **argv)
     int adc_value = 0;
     int want_ds1302 = 0;
     int ds1302_fields[7] = {0, 0, 0, 1, 1, 1, 0}; // sec,min,hour,date,month,weekday,year
+    unsigned long clock_hz = 0; // 0 = leave the board's own default
     int i;
 
     if (argc < 3)
@@ -65,6 +67,8 @@ int main(int argc, char **argv)
             }
             want_ds1302 = 1;
         }
+        else if (strncmp(argv[i], "clock_hz=", 9) == 0)
+            clock_hz = strtoul(argv[i] + 9, NULL, 10);
     }
 
     sim = sim_open("hc6800_es");
@@ -73,6 +77,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "sim_open failed\n");
         return EXIT_FAILURE;
     }
+    if (clock_hz > 0)
+        sim_set_clock_hz(sim, clock_hz); // before any sim_enable_*: see capi.h
     if (sim_load_hex(sim, argv[1]) != 0)
     {
         fprintf(stderr, "failed to load %s\n", argv[1]);

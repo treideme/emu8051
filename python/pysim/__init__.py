@@ -92,6 +92,9 @@ class _CAPI:
             lib.sim_get_instruction_count.argtypes = [HANDLE]
             lib.sim_get_tick_count.restype = ctypes.c_ulong
             lib.sim_get_tick_count.argtypes = [HANDLE]
+            lib.sim_get_clock_hz.restype = ctypes.c_ulong
+            lib.sim_get_clock_hz.argtypes = [HANDLE]
+            lib.sim_set_clock_hz.argtypes = [HANDLE, ctypes.c_ulong]
 
             lib.sim_get_port.restype = ctypes.c_int
             lib.sim_get_port.argtypes = [HANDLE, ctypes.c_int]
@@ -199,6 +202,19 @@ class Simulator:
     @property
     def tick_count(self) -> int:
         return self._capi.sim_get_tick_count(self._handle)
+
+    @property
+    def clock_hz(self) -> int:
+        """Board oscillator frequency; ticks-per-second is clock_hz/12 (1
+        tick = 1 machine cycle, see sim/devices/ds1302.c's own derivation
+        of this from hd44780.c's busy-timing constants)."""
+        return self._capi.sim_get_clock_hz(self._handle)
+
+    def set_clock_hz(self, hz: int):
+        """Override the board's default oscillator frequency. Call right
+        after opening, before enable_lcd()/enable_ds1302() -- both capture
+        clock_hz at their own creation time (see capi.h's own note)."""
+        self._capi.sim_set_clock_hz(self._handle, hz)
 
     def port(self, index: int) -> int:
         return self._capi.sim_get_port(self._handle, index)

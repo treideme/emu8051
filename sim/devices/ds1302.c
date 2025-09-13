@@ -28,11 +28,103 @@ struct ds1302
     uint8_t data_byte;
     int read_bit;
     int skip_next_falling; // see decode_command()'s PHASE_READ transition
+
+    unsigned long clock_hz;
+    unsigned long tick_accum; // see ds1302_step()
 };
 
 static uint8_t to_bcd(int aValue)
 {
     return (uint8_t)(((aValue / 10) << 4) | (aValue % 10));
+}
+
+static int from_bcd(uint8_t aValue)
+{
+    return ((aValue >> 4) & 0xf) * 10 + (aValue & 0xf);
+}
+
+static int is_leap_year(int aYear /* 0-99, last two digits */)
+{
+    return (aYear % 4) == 0; // good enough for a 2-digit-year teaching chip
+}
+
+static int days_in_month(int aMonth, int aYear)
+{
+    static const int dim[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (aMonth == 2 && is_leap_year(aYear))
+        return 29;
+    if (aMonth < 1 || aMonth > 12)
+        return 31;
+    return dim[aMonth - 1];
+}
+
+// One BCD second's worth of carry, cascading into minutes/hours/date
+// (with days-in-month/leap-year awareness)/month/year, plus the
+// once-a-day weekday increment. dev->regs[7] (write-protect) is untouched.
+static void advance_one_second(ds1302_t *dev)
+{
+    int sec = from_bcd(dev->regs[0]) + 1;
+    int min = from_bcd(dev->regs[1]);
+    int hour = from_bcd(dev->regs[2]);
+    int date = from_bcd(dev->regs[3]);
+    int month = from_bcd(dev->regs[4]);
+    int weekday = from_bcd(dev->regs[5]);
+    int year = from_bcd(dev->regs[6]);
+    int day_rolled = 0;
+
+    if (sec >= 60)
+    {
+        sec -= 60;
+        min++;
+    }
+    if (min >= 60)
+    {
+        min -= 60;
+        hour++;
+    }
+    if (hour >= 24)
+    {
+        hour -= 24;
+        date++;
+        day_rolled = 1;
+    }
+    if (day_rolled)
+    {
+        weekday++;
+        if (weekday > 7)
+            weekday = 1;
+
+        if (date > days_in_month(month, year))
+        {
+            date = 1;
+            month++;
+            if (month > 12)
+            {
+                month = 1;
+                year = (year + 1) % 100;
+            }
+        }
+    }
+
+    dev->regs[0] = to_bcd(sec);
+    dev->regs[1] = to_bcd(min);
+    dev->regs[2] = to_bcd(hour);
+    dev->regs[3] = to_bcd(date);
+    dev->regs[4] = to_bcd(month);
+    dev->regs[5] = to_bcd(weekday);
+    dev->regs[6] = to_bcd(year);
+}
+
+void ds1302_step(ds1302_t *aDev)
+{
+    if (aDev->clock_hz == 0)
+        return;
+    if (++aDev->tick_accum < aDev->clock_hz)
+        return;
+    aDev->tick_accum = 0; // deliberately dropped, not carried -- a fractional
+                           // leftover tick is well under measurement noise
+                           // for what this model is used for
+    advance_one_second(aDev);
 }
 
 void ds1302_set_time(ds1302_t *aDev, int aSeconds, int aMinutes, int aHours,
@@ -193,10 +285,16 @@ static void on_io_read(struct em8051 *aCPU, uint8_t aReg, void *aUserData, uint8
         *aOutValue = (uint8_t)(*aOutValue | pin_mask(dev->pins.io));
 }
 
-ds1302_t *ds1302_create(sim_bus_t *aBus, struct em8051 *aCPU, ds1302_pins_t aPins)
+ds1302_t *ds1302_create(sim_bus_t *aBus, struct em8051 *aCPU, ds1302_pins_t aPins, unsigned long aClockHz)
 {
     ds1302_t *dev = (ds1302_t *)calloc(1, sizeof(ds1302_t));
     dev->pins = aPins;
+    // tick() (core.c) advances one machine cycle per call, i.e. 12
+    // oscillator periods on a classic 8051 -- cross-checked against
+    // hd44780.c's own busy-timing constants (e.g. its "2ms" comment only
+    // holds if 1 tick = 1us at a 12MHz aClockHz). So ticks-per-real-second
+    // is aClockHz/12, not aClockHz itself.
+    dev->clock_hz = aClockHz / 12;
 
     // The bus dispatches to every subscriber of a register regardless of
     // how many there are, so this works whether or not CE/SCLK/IO happen

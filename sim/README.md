@@ -32,6 +32,70 @@ python/tests/                    <- unittest suite, run against real compiled
                                      .hex files from stc89c52-staging
 ```
 
+## Python setup
+
+The Python bindings/GUI/tests are kept out of the system interpreter --
+use `uv` to get an isolated environment scoped to this directory:
+
+```
+cd python
+uv venv .venv
+uv pip install -r requirements.txt
+.venv/Scripts/python sim_gui.py ../../stc89c52-staging/build/344_clock_lcd.hex   # or: uv run --no-project python sim_gui.py ...
+.venv/Scripts/python -m unittest discover -s tests -v
+```
+
+`.venv/` is gitignored; `pysim` itself has no dependencies (stdlib
+`ctypes` only) so the unittest suite runs fine even without the venv, but
+`sim_gui.py` needs PySide6 from it.
+
+## Reset, real-time playback, and the DS1302's own clock
+
+`sim_reset()`/`Simulator.reset()` resets the CPU (registers/PC/SFRs back to
+power-on state) and anything that's purely a *reflection* of what the CPU
+drove onto pins -- the digit display and LCD are destroyed and recreated
+fresh so they don't keep showing a stale pre-reset capture, the same class
+of bug `hc573_create()` had (above). It deliberately leaves DS1302,
+XPT2046, and any `sim_set_pin()` overrides alone: a real DS1302 is
+battery-backed and keeps running across an MCU reset, and an XPT2046
+reading or a forced pin is host-injected test stimulus, not CPU-derived
+state -- a reset button on the board wouldn't touch either. See
+`capi.h`'s own comment on `sim_reset()` and
+`python/tests/test_hc6800_es.py`'s `ResetTests` for what's covered.
+
+`sim_step()`'s ticks map to wall-clock time at `sim_get_clock_hz(sim)/12`
+ticks per second: `tick()` (`core.c`) advances one machine cycle per call
+(12 oscillator periods on a classic 8051), a conversion cross-checked
+against `hd44780.c`'s own busy-timing constants (its "2ms" comment only
+holds if 1 tick = 1us at a 12MHz `clock_hz`). `sim_gui.py --realtime` (or
+the "Real-time" checkbox) uses exactly that conversion to pace
+`sim.step()` against measured wall-clock time instead of running a fixed
+instruction count per GUI refresh, so what you see on screen advances at
+the same rate a real board would. Without it, `sim_step_instructions()` is
+effectively unthrottled -- fine for tests, but a DS1302 demo's seconds
+display would otherwise blow past a full minute in well under a second of
+wall-clock time.
+
+`hc6800_es`'s stock clock is a hardcoded 12MHz (`HC6800_ES_XTAL_HZ`), but
+`sim_set_clock_hz()`/`Simulator.set_clock_hz()`/`sim_gui.py --clock-hz HZ`
+(or `sim_test`'s `clock_hz=N`) override it for a different real part --
+still assumed 12-clocks-per-machine-cycle, just a different oscillator.
+Call it right after opening, before any `sim_enable_*()`/`enable_*()`:
+`hd44780`/`ds1302` both capture `clock_hz` at their own creation time, so
+setting it later only affects a peripheral enabled afterwards.
+
+That matters because DS1302 now keeps its own free-running clock:
+`ds1302_step()` (called once per tick from `capi.c`'s `post_tick()`, same
+convention as `hd44780_step()`) rolls the 8 BCD registers forward by
+whatever the same `clock_hz/12` conversion says is one real second,
+including minute/hour/date/month/year carry and leap years -- a real
+DS1302 does this off its own 32.768kHz crystal, independent of the host
+MCU's clock or whether anyone's watching, so this stays correct whether
+you're fast-forwarding a test or watching it live in real-time mode.
+`sim_gui.py`'s `--lcd`/`--digits`/`--ds1302`/`--adc` flags and
+`--instr-per-tick`/`--interval-ms` pre-set what used to be GUI-only
+options; see `sim_gui.py --help`.
+
 ## Why a bus/connector layer at all
 
 `struct em8051` (emu8051.h) has exactly one write callback slot and one
@@ -77,14 +141,18 @@ explicitly in that function).
 - HD44780: adapted from `../logicboard.c`'s command/DDRAM/CGRAM state
   machine (rewired off that file's hardcoded P1/P3 wiring onto `pin_t`).
   Full command decode, busy-flag timing, 4-bit and 8-bit interface modes.
-- DS1302: full 3-wire protocol, 8 clock/calendar registers, burst mode.
+- DS1302: full 3-wire protocol, 8 clock/calendar registers, burst mode,
+  and (see below) a free-running clock that advances in step with
+  simulated time, same as the real chip's own crystal would.
 - XPT2046: control-byte decode (channel, 8/12-bit mode) and a settable
   per-channel reading; no touch-pressure modeling.
 - 74HC573/74HC138: generic, reusable single-chip primitives; composed by
   `digit_display.*` for the common "latch + decoder + 7-segment bank"
   topology this board (and most similar teaching boards) use.
 - None of this models a peripheral chip's *electrical* behavior --
-  there's no ADC reference voltage, no RTC crystal drift, no LCD contrast.
+  there's no ADC reference voltage, no RTC crystal drift/inaccuracy
+  (DS1302's clock advances at exactly `clock_hz/12` real seconds per
+  second, not a real crystal's few-ppm wobble), no LCD contrast.
   It models the *protocol/register* behavior precisely enough that a
   firmware bug and a simulator bug are actually distinguishable, which is
   the property that mattered for finding these, all confirmed by tracing

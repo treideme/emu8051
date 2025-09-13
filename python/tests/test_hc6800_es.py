@@ -98,7 +98,6 @@ class DS1302Tests(unittest.TestCase):
             hours = sim.ds1302_register(2)
             self.assertNotEqual(hours, 0xFF, "read never completed (still floating)")
 
-
     @skip_unless_built("3432_clock_digit_tube_2.hex")
     def test_digits_survive_boot_without_stale_latch(self):
         # Regression test for a bug where 74HC573 outputs default to
@@ -122,6 +121,101 @@ class DS1302Tests(unittest.TestCase):
                     f"digit {i} shows 0x{segs:02x}, not a real smgduan[]/dash "
                     "pattern -- looks like a stale pre-boot latch capture",
                 )
+
+
+class RealTimeClockTests(unittest.TestCase):
+    """DS1302 keeps its own free-running clock now (ds1302_step(), tied to
+    simulated elapsed time via clock_hz/12 ticks-per-second -- see
+    sim/devices/ds1302.c), independent of any particular firmware, so
+    these don't need a stc89c52-staging checkout at all."""
+
+    def test_seconds_register_increments_exactly_on_the_boundary(self):
+        with Simulator("hc6800_es") as sim:
+            sim.enable_ds1302()
+            sim.ds1302_set_time(second=0, minute=0, hour=0, date=1, month=1, weekday=1, year=0)
+            ticks_per_second = sim.clock_hz // 12
+            sim.step(ticks_per_second - 1)
+            self.assertEqual(sim.ds1302_register(0), 0x00, "ticked over a second early")
+            sim.step(1)
+            self.assertEqual(sim.ds1302_register(0), 0x01, "didn't tick over on time")
+
+    def test_clock_hz_override_changes_tick_rate(self):
+        # e.g. a 10MHz part instead of hc6800_es's stock 12MHz -- still a
+        # classic 12-clocks-per-machine-cycle core, so ticks-per-second
+        # scales down proportionally with the oscillator.
+        with Simulator("hc6800_es") as sim:
+            sim.set_clock_hz(10_000_000)
+            sim.enable_ds1302()
+            self.assertEqual(sim.clock_hz, 10_000_000)
+            ticks_per_second = sim.clock_hz // 12
+            sim.ds1302_set_time(second=0, minute=0, hour=0, date=1, month=1, weekday=1, year=0)
+            sim.step(ticks_per_second - 1)
+            self.assertEqual(sim.ds1302_register(0), 0x00, "ticked over a second early")
+            sim.step(1)
+            self.assertEqual(sim.ds1302_register(0), 0x01, "didn't tick over on time")
+
+    def test_leap_year_day_and_month_rollover(self):
+        with Simulator("hc6800_es") as sim:
+            sim.enable_ds1302()
+            # 2024 is a leap year: Feb 28 23:59:59 -> Feb 29 00:00:00, not March 1.
+            sim.ds1302_set_time(second=59, minute=59, hour=23, date=28, month=2, weekday=7, year=24)
+            sim.step(sim.clock_hz // 12)
+            self.assertEqual(
+                [sim.ds1302_register(i) for i in range(7)],
+                [0x00, 0x00, 0x00, 0x29, 0x02, 0x01, 0x24],
+            )
+
+    def test_non_leap_year_rolls_into_march(self):
+        with Simulator("hc6800_es") as sim:
+            sim.enable_ds1302()
+            sim.ds1302_set_time(second=59, minute=59, hour=23, date=28, month=2, weekday=7, year=23)
+            sim.step(sim.clock_hz // 12)
+            self.assertEqual(
+                [sim.ds1302_register(i) for i in range(7)],
+                [0x00, 0x00, 0x00, 0x01, 0x03, 0x01, 0x23],
+            )
+
+    def test_year_wraps_at_century_boundary(self):
+        with Simulator("hc6800_es") as sim:
+            sim.enable_ds1302()
+            sim.ds1302_set_time(second=59, minute=59, hour=23, date=31, month=12, weekday=3, year=99)
+            sim.step(sim.clock_hz // 12)
+            self.assertEqual(
+                [sim.ds1302_register(i) for i in range(7)],
+                [0x00, 0x00, 0x00, 0x01, 0x01, 0x04, 0x00],
+            )
+
+
+class ResetTests(unittest.TestCase):
+    def test_reset_restarts_cpu_but_preserves_ds1302(self):
+        # A real DS1302 is battery-backed and keeps running across an MCU
+        # reset -- confirms sim_reset() doesn't touch it while it does
+        # zero the CPU-derived counters (see capi.h's sim_reset() comment).
+        with Simulator("hc6800_es") as sim:
+            sim.enable_ds1302()
+            sim.ds1302_set_time(second=30, minute=0, hour=0, date=1, month=1, weekday=1, year=25)
+            sim.step_instructions(1_000)
+            self.assertGreater(sim.instruction_count, 0)
+
+            sim.reset()
+
+            self.assertEqual(sim.instruction_count, 0)
+            self.assertEqual(sim.tick_count, 0)
+            self.assertEqual(sim.ds1302_register(0), 0x30)
+
+    @skip_unless_built("17_digit_tube_student_id.hex")
+    def test_reset_clears_stale_digit_display_capture(self):
+        with Simulator("hc6800_es", hexpath("17_digit_tube_student_id.hex")) as sim:
+            sim.enable_digit_display(8)
+            sim.step_instructions(500_000)
+            self.assertEqual(sim.digits_text(), "91204102")
+
+            sim.reset()
+
+            # Recreated fresh rather than still showing the pre-reset
+            # capture (this firmware hasn't re-driven P0 yet at PC=0).
+            for i in range(8):
+                self.assertEqual(sim.digit_segments(i), 0)
 
 
 class ADCTests(unittest.TestCase):
