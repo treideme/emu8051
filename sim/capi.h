@@ -1,0 +1,122 @@
+/* Flat C API for scripting the simulator from Python (or anything else
+ * that can load a shared library and call C functions -- ctypes, cffi,
+ * Lua FFI, ...).
+ * Copyright 2025 Thomas Reidemeister, MIT License (see devices/hc573.h)
+ *
+ * capi.h
+ *
+ * Deliberately kept to an opaque handle plus plain functions taking only
+ * primitive types (ints, strings, byte buffers) -- no structs cross this
+ * boundary, so there's no struct-layout/padding/ABI fragility for a
+ * ctypes.CDLL caller to get wrong. This is the only header a language
+ * binding needs; sim/bus.h and the device models under sim/devices are the C-to-C plugin
+ * surface, not meant to be bound directly from another language.
+ *
+ * Everything here is synchronous and single-threaded: call sim_step(),
+ * then query whatever you care about, then call sim_step() again. There
+ * are no background threads and no callback-based push notifications --
+ * a GUI or test driver is expected to poll in its own loop (e.g. a Qt
+ * QTimer calling sim_step() then re-reading state), which avoids needing
+ * any cross-thread/GIL-juggling machinery here.
+ */
+#ifndef SIM_CAPI_H
+#define SIM_CAPI_H
+
+#include <stdint.h>
+
+#if defined(_WIN32)
+#define SIM_API __declspec(dllexport)
+#else
+#define SIM_API __attribute__((visibility("default")))
+#endif
+
+typedef void *sim_handle_t;
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+    // aBoardName selects a sim/boards/* pinout catalog. Currently only
+    // "hc6800_es" exists; add more as new dev-kits show up.
+    SIM_API sim_handle_t sim_open(const char *aBoardName);
+    SIM_API void sim_close(sim_handle_t aSim);
+
+    // Returns 0 on success, negative on failure (bad path / bad file).
+    SIM_API int sim_load_hex(sim_handle_t aSim, const char *aPath);
+    SIM_API void sim_reset(sim_handle_t aSim);
+
+    // Advance the simulation. sim_step advances aTicks 12-clock ticks
+    // (the core's own unit -- see tick() in emu8051.h) and returns how
+    // many of those ticks completed a new instruction. sim_step_instructions
+    // is a convenience that instead runs until aInstructions instructions
+    // have completed (capped internally at aInstructions*100 ticks as a
+    // safety net -- every legal opcode completes in well under 100 ticks).
+    SIM_API long sim_step(sim_handle_t aSim, long aTicks);
+    SIM_API long sim_step_instructions(sim_handle_t aSim, long aInstructions);
+
+    SIM_API long sim_get_instruction_count(sim_handle_t aSim);
+    SIM_API unsigned long sim_get_tick_count(sim_handle_t aSim);
+
+    // Raw SFR port access. aPortIndex is 0-3 for P0-P3.
+    SIM_API int sim_get_port(sim_handle_t aSim, int aPortIndex);
+
+    // Raw internal RAM peek (address 0-127), mostly a debugging aid for
+    // cross-checking a .map file's reported address of some C variable.
+    SIM_API int sim_peek_idata(sim_handle_t aSim, int aAddress);
+
+    // Raw SFR peek. aAddress is the real SFR address (0x80-0xFF), e.g. 0xA8
+    // for IE, 0x98 for SCON -- not the pre-offset REG_* form.
+    SIM_API int sim_peek_sfr(sim_handle_t aSim, int aAddress);
+
+    // Force aPortIndex.aBit to read as aValue regardless of what the CPU
+    // itself last drove there -- the general-purpose way to fake a button
+    // press or any other external signal that isn't handled by one of the
+    // named peripheral models below. Call with aValue=-1 to release the
+    // pin back to normal (CPU-driven) behavior.
+    SIM_API void sim_set_pin(sim_handle_t aSim, int aPortIndex, int aBit, int aValue);
+    SIM_API int sim_get_pin(sim_handle_t aSim, int aPortIndex, int aBit);
+
+    // Exceptional CPU conditions (see EM8051_EXCEPTION in emu8051.h),
+    // recorded since the last call to this function (it clears the log
+    // as it returns the count). aOutCodes must hold at least aMaxCodes ints.
+    SIM_API int sim_get_exceptions(sim_handle_t aSim, int *aOutCodes, int aMaxCodes);
+
+    // --- Peripheral models: each is created lazily on its first
+    // sim_enable_*() call (idempotent -- calling again is a no-op) and
+    // wired to whatever pins aBoardName's catalog says. Query/stimulus
+    // functions for a peripheral that was never enabled return 0/empty.
+
+    SIM_API int sim_enable_digit_display(sim_handle_t aSim, int aDigitCount);
+    SIM_API int sim_digit_get_segments(sim_handle_t aSim, int aDigit);
+    SIM_API int sim_digit_get_char(sim_handle_t aSim, int aDigit); // ASCII '0'-'9'/'A'-'F'/'?'
+
+    SIM_API int sim_enable_lcd(sim_handle_t aSim);
+    // Writes up to aOutBufSize-1 chars plus a NUL into aOutBuf.
+    SIM_API void sim_lcd_get_line(sim_handle_t aSim, int aLine, int aWidth, char *aOutBuf, int aOutBufSize);
+
+    SIM_API int sim_enable_ds1302(sim_handle_t aSim);
+    SIM_API void sim_ds1302_set_time(sim_handle_t aSim, int aSeconds, int aMinutes, int aHours,
+                                      int aDate, int aMonth, int aWeekday, int aYear);
+    SIM_API int sim_ds1302_get_register(sim_handle_t aSim, int aRegister);
+
+    SIM_API int sim_enable_xpt2046(sim_handle_t aSim);
+    SIM_API void sim_xpt2046_set_reading(sim_handle_t aSim, int aValue12Bit);
+    SIM_API void sim_xpt2046_set_channel_reading(sim_handle_t aSim, int aChannel, int aValue12Bit);
+    SIM_API int sim_xpt2046_get_last_channel(sim_handle_t aSim);
+
+    // UART TX capture (RX, i.e. the reverse direction, is injected with
+    // sim_uart_inject_rx -- there is no separate "enable", the core
+    // simulates UART TX unconditionally).
+    SIM_API int sim_uart_tx_count(sim_handle_t aSim);
+    SIM_API int sim_uart_tx_byte(sim_handle_t aSim, int aIndex);
+    // Deposits aByte into SBUF and raises the serial interrupt condition
+    // (RI + the same trigger path the core's own TX completion uses),
+    // simulating a byte having just arrived over UART.
+    SIM_API void sim_uart_inject_rx(sim_handle_t aSim, unsigned char aByte);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // SIM_CAPI_H
