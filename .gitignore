@@ -27,6 +27,7 @@ build/
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 #editor temp files
 \#*

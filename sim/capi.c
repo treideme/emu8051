@@ -30,7 +30,10 @@ struct sim
                         // instead of needing a second cpu->sim registry.
     sim_bus_t *bus;
 
+    unsigned long clock_hz;
+
     digit_display_t *digit_display;
+    int digit_count; // remembered so sim_reset() can recreate it identically
     hd44780_t *lcd;
     ds1302_t *ds1302;
     xpt2046_t *xpt2046;
@@ -106,6 +109,7 @@ sim_handle_t sim_open(const char *aBoardName)
     s->cpu.mExtData = (unsigned char *)calloc(65536, 1);
     s->cpu.mUpperData = (unsigned char *)calloc(128, 1);
     s->cpu.except = on_exception;
+    s->clock_hz = HC6800_ES_XTAL_HZ; // only one board catalog exists today
 
     s->bus = bus_create(&s->cpu);
     bus_on_write(s->bus, REG_SBUF, on_sbuf_write, s);
@@ -139,16 +143,57 @@ int sim_load_hex(sim_handle_t aSim, const char *aPath)
     return load_obj(&s->cpu, (char *)aPath);
 }
 
+unsigned long sim_get_clock_hz(sim_handle_t aSim)
+{
+    return ((struct sim *)aSim)->clock_hz;
+}
+
+void sim_set_clock_hz(sim_handle_t aSim, unsigned long aClockHz)
+{
+    ((struct sim *)aSim)->clock_hz = aClockHz;
+}
+
 void sim_reset(sim_handle_t aSim)
 {
     struct sim *s = (struct sim *)aSim;
+
+    // CPU first: the digit-display/LCD recreate below reads pin/port state
+    // at construction time (see hc573_create()), and that read needs to see
+    // the *post*-reset power-on port state, not whatever was there a moment
+    // ago.
     reset(&s->cpu, 0);
+
+    s->exception_count = 0;
+    s->total_tx_count = 0;
+    s->last_tx_idx = 0;
+    s->total_instructions = 0;
+    s->total_ticks = 0;
+
+    // Recreated fresh so they don't keep showing whatever they last
+    // captured from the CPU before reset -- these are pure reflections of
+    // CPU port writes, not independent state. DS1302/XPT2046/sim_set_pin
+    // stimulus are deliberately left alone; see sim_reset()'s own comment
+    // in capi.h for why.
+    if (s->digit_display)
+    {
+        digit_display_destroy(s->digit_display);
+        s->digit_display = NULL;
+        sim_enable_digit_display(aSim, s->digit_count);
+    }
+    if (s->lcd)
+    {
+        hd44780_destroy(s->lcd);
+        s->lcd = NULL;
+        sim_enable_lcd(aSim);
+    }
 }
 
 static void post_tick(struct sim *s)
 {
     if (s->lcd)
         hd44780_step(s->lcd);
+    if (s->ds1302)
+        ds1302_step(s->ds1302);
     if (s->cpu.serial_out_idx != s->last_tx_idx)
     {
         // Can only ever differ by one byte per tick (transmitting a byte
@@ -293,6 +338,7 @@ int sim_enable_digit_display(sim_handle_t aSim, int aDigitCount)
     pins.select = HC6800_ES_SEG_SELECT;
     pins.digit_count = aDigitCount;
     s->digit_display = digit_display_create(s->bus, &s->cpu, pins);
+    s->digit_count = aDigitCount;
     return 0;
 }
 
@@ -314,7 +360,7 @@ int sim_enable_lcd(sim_handle_t aSim)
     struct sim *s = (struct sim *)aSim;
     if (s->lcd)
         return 0;
-    s->lcd = hd44780_create(s->bus, &s->cpu, HC6800_ES_LCD, HC6800_ES_XTAL_HZ);
+    s->lcd = hd44780_create(s->bus, &s->cpu, HC6800_ES_LCD, s->clock_hz);
     return 0;
 }
 
@@ -335,7 +381,7 @@ int sim_enable_ds1302(sim_handle_t aSim)
     struct sim *s = (struct sim *)aSim;
     if (s->ds1302)
         return 0;
-    s->ds1302 = ds1302_create(s->bus, &s->cpu, HC6800_ES_DS1302);
+    s->ds1302 = ds1302_create(s->bus, &s->cpu, HC6800_ES_DS1302, s->clock_hz);
     return 0;
 }
 

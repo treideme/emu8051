@@ -9,9 +9,11 @@ whatever state comes back -- no cross-thread signaling, no GIL juggling,
 matching the "keep the integration tight" brief. See pysim/__init__.py and
 sim/capi.h for why this project didn't reach for an async/callback API.
 
-Usage: python sim_gui.py [hexfile]
+Usage: python sim_gui.py [hexfile] [options] -- see --help.
 """
+import argparse
 import sys
+import time
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor, QFont
@@ -66,10 +68,13 @@ class PortView(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, hexfile=None):
+    def __init__(self, args):
         super().__init__()
         self.setWindowTitle("emu8051 sim - HC6800-ES")
         self.sim = None
+        self._digit_count = args.digits if args.digits else 8
+        self._clock_hz = args.clock_hz
+        self._last_wall_time = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -90,12 +95,28 @@ class MainWindow(QMainWindow):
         step_btn.clicked.connect(lambda: self.advance(10_000))
         controls.addWidget(step_btn)
 
+        reset_btn = QPushButton("Reset")
+        reset_btn.clicked.connect(self.reset_sim)
+        controls.addWidget(reset_btn)
+
         controls.addWidget(QLabel("instr/tick:"))
         self.instr_per_tick = QSpinBox()
         self.instr_per_tick.setRange(100, 5_000_000)
-        self.instr_per_tick.setValue(50_000)
+        self.instr_per_tick.setValue(args.instr_per_tick)
         self.instr_per_tick.setSingleStep(10_000)
         controls.addWidget(self.instr_per_tick)
+
+        self.cb_realtime = QCheckBox("Real-time")
+        self.cb_realtime.setToolTip(
+            "Paces execution against the board's own oscillator (clock_hz/12 "
+            "ticks per second) instead of a fixed instruction count per "
+            "refresh, so on-screen changes track wall-clock time -- e.g. the "
+            "DS1302 demos' seconds display actually takes a real second per "
+            "tick. 'instr/tick' above is ignored while this is checked."
+        )
+        self.cb_realtime.toggled.connect(self.instr_per_tick.setDisabled)
+        self.cb_realtime.toggled.connect(self._realtime_toggled)
+        controls.addWidget(self.cb_realtime)
 
         self.status_label = QLabel("no file loaded")
         controls.addWidget(self.status_label)
@@ -105,7 +126,7 @@ class MainWindow(QMainWindow):
         # --- peripheral enable checkboxes ---
         peri = QHBoxLayout()
         self.cb_lcd = QCheckBox("LCD")
-        self.cb_digits = QCheckBox("7-segment (8 digit)")
+        self.cb_digits = QCheckBox(f"7-segment ({self._digit_count} digit)")
         self.cb_ds1302 = QCheckBox("DS1302")
         self.cb_adc = QCheckBox("XPT2046 ADC")
         for cb in (self.cb_lcd, self.cb_digits, self.cb_ds1302, self.cb_adc):
@@ -125,23 +146,31 @@ class MainWindow(QMainWindow):
         # --- digits + LCD ---
         mid = QHBoxLayout()
 
-        digit_box = QGroupBox("7-segment")
-        digit_layout = QHBoxLayout(digit_box)
+        self.digit_box = QGroupBox("7-segment")
+        digit_layout = QHBoxLayout(self.digit_box)
         self.digit_label = QLabel("--------")
         self.digit_label.setFont(QFont("Consolas", 24))
         digit_layout.addWidget(self.digit_label)
-        mid.addWidget(digit_box)
+        mid.addWidget(self.digit_box)
 
-        lcd_box = QGroupBox("LCD (1602)")
-        lcd_layout = QVBoxLayout(lcd_box)
+        self.lcd_box = QGroupBox("LCD (1602)")
+        lcd_layout = QVBoxLayout(self.lcd_box)
         self.lcd_lines = [QLabel(" " * 16), QLabel(" " * 16)]
         for lbl in self.lcd_lines:
             lbl.setFont(MONO)
             lbl.setStyleSheet("background:#042; color:#9f9; padding:4px;")
             lcd_layout.addWidget(lbl)
-        mid.addWidget(lcd_box)
+        mid.addWidget(self.lcd_box)
 
         root.addLayout(mid)
+
+        # Panels for a peripheral that isn't enabled get grayed out rather
+        # than just showing blank content -- otherwise "not enabled" and
+        # "enabled but nothing captured yet" look identical.
+        self.digit_box.setEnabled(self.cb_digits.isChecked())
+        self.lcd_box.setEnabled(self.cb_lcd.isChecked())
+        self.cb_digits.toggled.connect(self.digit_box.setEnabled)
+        self.cb_lcd.toggled.connect(self.lcd_box.setEnabled)
 
         # --- UART log ---
         uart_box = QGroupBox("UART TX log")
@@ -155,11 +184,17 @@ class MainWindow(QMainWindow):
         self._uart_seen = 0
 
         self.timer = QTimer(self)
-        self.timer.setInterval(30)
+        self.timer.setInterval(args.interval_ms)
         self.timer.timeout.connect(self.on_tick)
 
-        if hexfile:
-            self.load(hexfile)
+        self.cb_lcd.setChecked(args.lcd)
+        self.cb_digits.setChecked(args.digits is not None)
+        self.cb_ds1302.setChecked(args.ds1302)
+        self.cb_adc.setChecked(args.adc)
+        self.cb_realtime.setChecked(args.realtime)
+
+        if args.hexfile:
+            self.load(args.hexfile)
 
     def open_hex(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Intel HEX", "", "Hex files (*.hex);;All files (*)")
@@ -170,6 +205,8 @@ class MainWindow(QMainWindow):
         if self.sim:
             self.sim.close()
         self.sim = Simulator("hc6800_es", path)
+        if self._clock_hz:
+            self.sim.set_clock_hz(self._clock_hz)
         self._uart_seen = 0
         self.uart_log.clear()
         self.apply_peripherals()
@@ -182,27 +219,60 @@ class MainWindow(QMainWindow):
         if self.cb_lcd.isChecked():
             self.sim.enable_lcd()
         if self.cb_digits.isChecked():
-            self.sim.enable_digit_display(8)
+            self.sim.enable_digit_display(self._digit_count)
         if self.cb_ds1302.isChecked():
             self.sim.enable_ds1302()
         if self.cb_adc.isChecked():
             self.sim.enable_xpt2046()
 
+    def reset_sim(self):
+        if not self.sim:
+            return
+        self.sim.reset()
+        self._uart_seen = 0
+        self.uart_log.clear()
+        self._last_wall_time = time.perf_counter()
+        self.refresh()
+
     def toggle_run(self, checked):
         if checked:
             self.run_btn.setText("Pause")
+            self._last_wall_time = time.perf_counter()
             self.timer.start()
         else:
             self.run_btn.setText("Run")
             self.timer.stop()
 
+    def _realtime_toggled(self, _checked):
+        # Reset the pacing reference point whenever the mode changes while
+        # already running, so the next tick doesn't see a stale delta from
+        # before the switch and try to "catch up" with a huge step.
+        if self.run_btn.isChecked():
+            self._last_wall_time = time.perf_counter()
+
     def on_tick(self):
-        self.advance(self.instr_per_tick.value())
+        if self.cb_realtime.isChecked():
+            self.advance_realtime()
+        else:
+            self.advance(self.instr_per_tick.value())
 
     def advance(self, count):
         if not self.sim:
             return
         self.sim.step_instructions(count)
+        self.refresh()
+
+    def advance_realtime(self):
+        if not self.sim:
+            return
+        now = time.perf_counter()
+        elapsed = 0.0 if self._last_wall_time is None else (now - self._last_wall_time)
+        self._last_wall_time = now
+        # clock_hz/12: tick() is one machine cycle (12 oscillator periods),
+        # see sim/devices/ds1302.c's own derivation of this from
+        # hd44780.c's busy-timing constants.
+        ticks = max(1, round(elapsed * (self.sim.clock_hz // 12)))
+        self.sim.step(ticks)
         self.refresh()
 
     def refresh(self):
@@ -229,9 +299,40 @@ class MainWindow(QMainWindow):
             self.uart_log.appendPlainText(f"[exception] {', '.join(excs)}")
 
 
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("hexfile", nargs="?", default=None, help="Intel HEX file to load at startup")
+    parser.add_argument(
+        "--instr-per-tick", type=int, default=50_000, metavar="N",
+        help="instructions to run per GUI refresh in fixed-rate mode (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--interval-ms", type=int, default=30, metavar="N",
+        help="GUI refresh interval in milliseconds (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--realtime", action="store_true",
+        help="start paced against the board's own clock instead of a fixed instruction count per refresh",
+    )
+    parser.add_argument(
+        "--clock-hz", type=int, default=None, metavar="HZ",
+        help="override the board's oscillator frequency (default: hc6800_es's stock 12000000; "
+             "still assumes a classic 12-clocks-per-machine-cycle core)",
+    )
+    parser.add_argument("--lcd", action="store_true", help="enable the LCD panel at startup")
+    parser.add_argument(
+        "--digits", type=int, nargs="?", const=8, default=None, metavar="N",
+        help="enable the 7-segment display at startup (default 8 digits if N omitted)",
+    )
+    parser.add_argument("--ds1302", action="store_true", help="enable the DS1302 RTC at startup")
+    parser.add_argument("--adc", action="store_true", help="enable the XPT2046 ADC at startup")
+    return parser.parse_args(argv)
+
+
 def main():
-    app = QApplication(sys.argv)
-    win = MainWindow(sys.argv[1] if len(sys.argv) > 1 else None)
+    args = parse_args(sys.argv[1:])
+    app = QApplication(sys.argv[:1])
+    win = MainWindow(args)
     win.resize(720, 640)
     win.show()
     sys.exit(app.exec())

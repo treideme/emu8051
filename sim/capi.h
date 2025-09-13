@@ -44,7 +44,37 @@ extern "C"
 
     // Returns 0 on success, negative on failure (bad path / bad file).
     SIM_API int sim_load_hex(sim_handle_t aSim, const char *aPath);
+
+    // Resets the CPU (registers/PC/SFRs back to power-on state) and
+    // anything that's purely a *reflection* of what the CPU has driven
+    // onto pins (the digit display's captured segments, the LCD's DDRAM/
+    // cursor state) -- both re-created fresh so they don't show stale
+    // pre-reset content. Also zeros the instruction/tick/UART-TX counters
+    // and the exception log, so a caller can treat this as "start this
+    // run over". Does NOT touch DS1302 (a real one is battery-backed and
+    // keeps running across an MCU reset), XPT2046 (its reading is
+    // host-injected test stimulus, not CPU-derived state), or sim_set_pin
+    // overrides (same reasoning -- a forced pin represents something
+    // external, like a button, that a reset button doesn't move).
     SIM_API void sim_reset(sim_handle_t aSim);
+
+    // The board's oscillator frequency in Hz -- ticks-per-second in the
+    // sim_step()/sim_get_tick_count() sense (1 tick = 1 oscillator cycle,
+    // see sim_step's own comment). Needed by a caller that wants to pace
+    // itself against real elapsed time (real-time playback) or that wants
+    // to convert a peripheral's own tick-scaled timing, like DS1302's
+    // real-time-in-simulated-time clock, back into seconds.
+    SIM_API unsigned long sim_get_clock_hz(sim_handle_t aSim);
+
+    // Overrides the board's default oscillator frequency (e.g. a 10MHz
+    // part instead of hc6800_es's stock 12MHz) -- still assumes a classic
+    // 12-clocks-per-machine-cycle core (see sim/devices/ds1302.c's own
+    // clock_hz/12 derivation); there's no per-part cycles-per-instruction
+    // knob. Call right after sim_open(), before any sim_enable_*() --
+    // hd44780/ds1302 both capture clock_hz at their own creation time, so
+    // changing it afterwards only affects a peripheral enabled later, not
+    // one already running.
+    SIM_API void sim_set_clock_hz(sim_handle_t aSim, unsigned long aClockHz);
 
     // Advance the simulation. sim_step advances aTicks 12-clock ticks
     // (the core's own unit -- see tick() in emu8051.h) and returns how

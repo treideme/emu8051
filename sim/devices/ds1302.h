@@ -25,8 +25,19 @@ typedef struct
 
 typedef struct ds1302 ds1302_t;
 
-ds1302_t *ds1302_create(sim_bus_t *aBus, struct em8051 *aCPU, ds1302_pins_t aPins);
+// aClockHz is the CPU clock ds1302_step()'s real-time-in-simulated-time
+// advancement is scaled against (see ds1302_step()).
+ds1302_t *ds1302_create(sim_bus_t *aBus, struct em8051 *aCPU, ds1302_pins_t aPins, unsigned long aClockHz);
 void ds1302_destroy(ds1302_t *aDev);
+
+// Advance the free-running clock/calendar by one tick. A real DS1302 keeps
+// time off its own 32.768kHz crystal, independent of the host MCU -- this
+// approximates that by counting CPU ticks and rolling the register file
+// forward one full BCD second (with minute/hour/date/month/year carry,
+// including leap years) once a real second's worth of them, scaled
+// against aClockHz (passed to ds1302_create()), has accumulated. Call once
+// per tick(), same convention as hd44780_step().
+void ds1302_step(ds1302_t *aDev);
 
 // Stimulus: set the simulated real-time clock's current date/time. Values
 // are plain decimal (e.g. aSeconds=45), not BCD -- converted internally.
