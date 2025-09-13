@@ -99,6 +99,31 @@ class DS1302Tests(unittest.TestCase):
             self.assertNotEqual(hours, 0xFF, "read never completed (still floating)")
 
 
+    @skip_unless_built("clock_digit_tube.hex")
+    def test_digits_survive_boot_without_stale_latch(self):
+        # Regression test for a bug where 74HC573 outputs default to
+        # transparent=0 (calloc'd) regardless of LE's actual level. This
+        # firmware never writes LE at all -- relying on the 8051's
+        # power-on P1=0xFF default to keep the latch permanently
+        # transparent -- so with the bug, digit_display's resample()
+        # would capture one spurious all-segments-on snapshot during
+        # Ds1302Init()/Int1Init() (while LE reads 1 but the model still
+        # thought it was 0/latched) and then never recapture it, since
+        # data-bus writes wrongly no-op'd on grounds the latch was closed.
+        VALID_SEGMENTS = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f, 0x40}
+        with Simulator("hc6800_es", hexpath("clock_digit_tube.hex")) as sim:
+            sim.enable_ds1302()
+            sim.enable_digit_display(8)
+            sim.step_instructions(500_000)
+            for i in range(8):
+                segs = sim.digit_segments(i)
+                self.assertIn(
+                    segs, VALID_SEGMENTS,
+                    f"digit {i} shows 0x{segs:02x}, not a real smgduan[]/dash "
+                    "pattern -- looks like a stale pre-boot latch capture",
+                )
+
+
 class ADCTests(unittest.TestCase):
     @skip_unless_built("ad_xpt2046_adc.hex")
     def test_channel_select(self):

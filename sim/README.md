@@ -72,7 +72,7 @@ a new board into `capi.c`'s `sim_open()` board-name dispatch is the one
 place that currently assumes `hc6800_es` is the only option (flagged
 explicitly in that function).
 
-## Fidelity notes and the two real bugs found building this
+## Fidelity notes and the real bugs found building this
 
 - HD44780: adapted from `../logicboard.c`'s command/DDRAM/CGRAM state
   machine (rewired off that file's hardcoded P1/P3 wiring onto `pin_t`).
@@ -87,8 +87,8 @@ explicitly in that function).
   there's no ADC reference voltage, no RTC crystal drift, no LCD contrast.
   It models the *protocol/register* behavior precisely enough that a
   firmware bug and a simulator bug are actually distinguishable, which is
-  the property that mattered for finding these two, both confirmed by
-  tracing real compiled output from the demo projects against a
+  the property that mattered for finding these, all confirmed by tracing
+  real compiled output from the demo projects against a
   known-correct protocol/ISA reference rather than assumed:
   - **`mov_mem_indir_rx` in `../opcodes.c`** (opcode 0x86/0x87, `MOV
     direct,@Ri`) had source and destination completely swapped -- a
@@ -101,12 +101,16 @@ explicitly in that function).
     edge completing that same clock pulse -- and the code was treating
     that leftover falling edge as the first data bit's advance, silently
     skipping bit 0 of every read.
-
-## Known limitation
-
-`clock_digit_tube` (one of the demo projects' three DS1302 demos)
-still shows a stale/incorrect digit-display pattern despite the DS1302
-protocol itself being independently confirmed correct (bit-level trace
-verified; the other two DS1302 demos, `3431_clock_digit_tube_1` and
-`344_clock_lcd`, both display correctly). Not yet root-caused -- flagging
-rather than silently leaving unexplained.
+  - **`hc573_create()` in `sim/devices/hc573.c`** initialized its
+    `transparent` (LE-open) flag to 0 unconditionally, on the assumption
+    that any firmware driving this latch would explicitly write LE at
+    least once. `clock_digit_tube` never does -- it relies on the
+    8051's port power-on default (P1=0xFF) to leave LE permanently high
+    -- so the flag stayed stuck closed forever, since the only other
+    place it's set is the LE-write callback, which needs a write *event*
+    that firmware never produces. Surfaced as one digit position per
+    multiplex cycle latching a single spurious all-segments-on snapshot
+    at boot and never updating again. Fixed by reading LE's actual level
+    at device-creation time instead of assuming it; covered by
+    `python/tests/test_hc6800_es.py`'s
+    `test_digits_survive_boot_without_stale_latch`.

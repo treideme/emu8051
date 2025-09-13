@@ -57,6 +57,16 @@ hc573_t *hc573_create(sim_bus_t *aBus, struct em8051 *aCPU, hc573_pins_t aPins)
     int reg_done[128] = {0};
 
     dev->pins = aPins;
+    // Read LE's *actual current* level rather than assuming 0/latched:
+    // a firmware that never explicitly drives LE (relying on the 8051's
+    // power-on port default of 0xFF, i.e. permanently transparent, rather
+    // than writing it itself -- confirmed in the wild via
+    // a clock demo driving a 7-segment display, which has no LE
+    // assignment anywhere) would otherwise leave transparent stuck at
+    // its calloc'd 0 forever, since the only other place it's ever set
+    // is on_le_write(), which needs an actual write *event* to fire and
+    // therefore never runs for a pin nothing ever writes.
+    dev->transparent = pin_get(aCPU, aPins.le);
     dev->output = read_data_bus(dev, aCPU); // reflect whatever's on the bus at power-up
 
     bus_on_write(aBus, aPins.le.reg, on_le_write, dev);
