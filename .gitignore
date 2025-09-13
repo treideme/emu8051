@@ -15,6 +15,19 @@
 #binary file
 emu
 
+# Windows build outputs (meson/msvc/mingw)
+*.dll
+*.dll.a
+*.exe
+*.pdb
+
+# meson build directory
+build/
+
+# Python
+__pycache__/
+*.pyc
+
 #editor temp files
 \#*
 .\#*

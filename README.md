@@ -64,6 +64,11 @@ make -C tests check
 ```
 
 
+For the peripheral-simulation layer (HD44780/DS1302/XPT2046/7-segment
+device models, the Python ctypes bindings, the PySide6 GUI, and the
+`meson test`/`unittest` suite run against the demo projects' compiled
+demos), see [`sim/README.md`](sim/README.md).
+
 ----
 Original Documentation
 ======================
