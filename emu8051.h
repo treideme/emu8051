@@ -25,6 +25,8 @@
  * emu8051.h
  * Emulator core header file
  */
+#ifndef EM8051_H
+#define EM8051_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -259,4 +261,6 @@ enum EM8051_EXCEPTION
     EXCEPTION_IRET_ACC_MISMATCH, // acc not preserved over interrupt call
     EXCEPTION_ILLEGAL_OPCODE     // for the single 'reserved' opcode in the architecture
 };
+
+#endif // EM8051_H
 

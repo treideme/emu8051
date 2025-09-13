@@ -1,5 +1,5 @@
 /* 8051 emulator test case
- * Copyright 2022 Thomas Reidemeister
+ * Copyright 2025 Thomas Reidemeister
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -23,131 +23,85 @@
  * (i.e. the MIT License)
  *
  * testcase.c, stripped down version of emu.c
- * Simple testcase just using core functions of emu8051
+ * Simple testcase just using core functions of emu8051 -- no curses, no
+ * peripheral models (see sim/ + sim/capi.h for those). This exists purely
+ * as a minimal, dependency-free smoke test that the core itself still
+ * builds and runs: does the CPU boot and execute the expected first port
+ * write. Rewritten against the current struct em8051 layout (fixed-size
+ * mLowerData/mSFR arrays, mCodeMemMaxIdx/mExtDataMaxIdx, per-register
+ * sfrread[]/sfrwrite[] callback arrays) -- the previous version predated a
+ * core refactor and no longer matched emu8051.h at all.
  */
-
-#ifdef _MSC_VER
-#include <windows.h>
-#undef MOUSE_MOVED
-#else
-#include <sys/time.h>
-#include <unistd.h>
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef __linux__
-#include <curses.h>
-#else
-#include "curses.h"
-#endif
 #include "emu8051.h"
-#include "emulator.h"
 
-int runmode = 0;
-// current run speed, lower is faster
-int speed = 6;
-// instruction count; needed to replay history correctly
-unsigned int icount = 0;
-// current clock count
-unsigned int clocks = 0;
-
-// returns time in 1ms units
-int getTick()
+static void emu_exception(struct em8051 *aCPU, int aCode)
 {
-#ifdef _MSC_VER
-  return GetTickCount();
-#else
-  struct timeval now;
-  gettimeofday(&now, NULL);
-  return now.tv_sec * 1000 + now.tv_usec / 1000;
-#endif
+    (void)aCPU;
+    (void)aCode;
 }
 
-void emu_sleep(int value)
+int main(int parc, char **pars)
 {
-#ifdef _MSC_VER
-  Sleep(value);
-#else
-  usleep(value * 1000);
-#endif
-}
+    struct em8051 emu;
+    int ticked;
+    unsigned int icount = 0;
+    unsigned int clocks = 0;
 
-void emu_exception(struct em8051 *aCPU, int aCode)
-{
-  (void)aCPU;
-  switch (aCode)
-  {
-    case EXCEPTION_IRET_SP_MISMATCH:
-      break;
-    case EXCEPTION_IRET_ACC_MISMATCH:
-      break;
-    case EXCEPTION_IRET_PSW_MISMATCH:
-      break;
-    case EXCEPTION_ACC_TO_A:
-      break;
-    case EXCEPTION_STACK:
-      break;
-    case EXCEPTION_ILLEGAL_OPCODE:
-      break;
-  }
-}
+    memset(&emu, 0, sizeof(emu));
+    emu.mCodeMemMaxIdx = 65535;
+    emu.mCodeMem = calloc(emu.mCodeMemMaxIdx + 1, sizeof(unsigned char));
+    emu.mExtDataMaxIdx = 65535;
+    emu.mExtData = calloc(emu.mExtDataMaxIdx + 1, sizeof(unsigned char));
+    emu.mUpperData = calloc(128, sizeof(unsigned char));
+    emu.except = emu_exception;
+    reset(&emu, 1);
 
-int emu_sfrread(struct em8051 *aCPU, int aRegister)
-{
-  return aCPU->mSFR[aRegister - 0x80];
-}
-
-int main(int parc, char ** pars)
-{
-  struct em8051 emu;
-  int ticked = 1;
-
-  memset(&emu, 0, sizeof(emu));
-  emu.mCodeMem     = malloc(65536);
-  emu.mCodeMemSize = 65536;
-  emu.mExtData     = malloc(65536);
-  emu.mExtDataSize = 65536;
-  emu.mLowerData   = malloc(128);
-  emu.mUpperData   = malloc(128);
-  emu.mSFR         = malloc(128);
-  emu.except       = &emu_exception;
-  emu.sfrread      = &emu_sfrread;
-  emu.xread = NULL;
-  emu.xwrite = NULL;
-  reset(&emu, 1);
-
-  if(parc != 2) {
-    fprintf(stderr, "Please provide a hex file for this test-case\n");
-    return EXIT_FAILURE;
-  }
-  if (load_obj(&emu, pars[1]) != 0)
-  {
-    fprintf(stderr, "File '%s' load failure\n\n",pars[1]);
-    return EXIT_FAILURE;
-  }
-
-  do {
-    clocks += 12;
-    ticked = tick(&emu);
-
-    if (ticked) {
-      icount++;
-    }
-
-    // Sucessfully abort when P2 is changed from 0xFF to 0xFE
-    if(emu.mSFR[REG_P2] != 0xFF) {
-      if(emu.mSFR[REG_P2] == 0xFE) {
-        printf("Successfully toggled P2.0 after %i instructions and %i cycles\n", icount, clocks);
-        return EXIT_SUCCESS;
-      } else {
-        fprintf(stderr, "Unexpected change of P2 after %i instructions and %i cycles", icount, clocks);
+    if (parc != 2)
+    {
+        fprintf(stderr, "Please provide a hex file for this test-case\n");
         return EXIT_FAILURE;
-      }
     }
-  } while(icount < 12000);
-  fprintf(stderr, "Did not observe expected state change\n");
+    if (load_obj(&emu, pars[1]) != 0)
+    {
+        fprintf(stderr, "File '%s' load failure\n\n", pars[1]);
+        return EXIT_FAILURE;
+    }
 
-  return EXIT_FAILURE;
+    do
+    {
+        clocks += 12;
+        ticked = tick(&emu);
+        if (ticked)
+            icount++;
+
+        // Succeed as soon as P2 is changed from its 0xff init value to 0xfe
+        // (the "toggle P2.0 low" pattern every LED demo in this project's
+        // sibling repos starts with).
+        if (emu.mSFR[REG_P2] != 0xFF)
+        {
+            if (emu.mSFR[REG_P2] == 0xFE)
+            {
+                printf("Successfully toggled P2.0 after %u instructions and %u cycles\n", icount, clocks);
+                free(emu.mCodeMem);
+                free(emu.mExtData);
+                free(emu.mUpperData);
+                return EXIT_SUCCESS;
+            }
+            fprintf(stderr, "Unexpected change of P2 (0x%02x) after %u instructions and %u cycles\n",
+                    emu.mSFR[REG_P2], icount, clocks);
+            free(emu.mCodeMem);
+            free(emu.mExtData);
+            free(emu.mUpperData);
+            return EXIT_FAILURE;
+        }
+    } while (icount < 12000);
+
+    fprintf(stderr, "Did not observe expected state change\n");
+    free(emu.mCodeMem);
+    free(emu.mExtData);
+    free(emu.mUpperData);
+    return EXIT_FAILURE;
 }
