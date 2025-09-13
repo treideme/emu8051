@@ -842,8 +842,10 @@ static uint8_t mov_mem_mem(struct em8051 *aCPU)
 
 static uint8_t mov_mem_indir_rx(struct em8051 *aCPU)
 {
-    uint8_t address_from = OPERAND1;
-    uint8_t address_to = INDIR_RX_ADDRESS;
+    // MOV direct,@Ri: the instruction's single direct address is the
+    // destination and @Ri is the source, not the other way round.
+    uint8_t address_to = OPERAND1;
+    uint8_t address_from = INDIR_RX_ADDRESS;
     uint8_t value = read_mem_indir(aCPU, address_from);
     write_mem(aCPU, address_to, value);
     PC += 2;

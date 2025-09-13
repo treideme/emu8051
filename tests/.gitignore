@@ -1,0 +1,3 @@
+# built test binaries
+test_*
+!test_*.c
