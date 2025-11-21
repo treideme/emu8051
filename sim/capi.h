@@ -135,6 +135,32 @@ extern "C"
     SIM_API void sim_xpt2046_set_channel_reading(sim_handle_t aSim, int aChannel, int aValue12Bit);
     SIM_API int sim_xpt2046_get_last_channel(sim_handle_t aSim);
 
+    // --- External peripherals: unlike the board-catalog peripherals
+    // above, these are NOT part of any real HC6800-ES pin map (see
+    // sim/README.md's "plugin vs board definition" note) -- there's no
+    // servo header and no ENC28J60 module on that board. A caller passes
+    // its own assumed pin wiring explicitly (aPortIndex 0-3 for P0-P3,
+    // aBit 0-7, same convention as sim_get_pin/sim_set_pin above) rather
+    // than picking it from a board constant.
+
+    // aPulseMinUs/aPulseMaxUs are typically 1000/2000 for a standard
+    // hobby servo (0-180 degrees over a 1-2ms pulse).
+    SIM_API int sim_enable_servo(sim_handle_t aSim, int aPwmPortIndex, int aPwmBit,
+                                 int aPulseMinUs, int aPulseMaxUs);
+    SIM_API int sim_servo_get_pulse_us(sim_handle_t aSim);
+    SIM_API int sim_servo_get_angle_decidegrees(sim_handle_t aSim); // 0-1800, tenths of a degree
+
+    // ENC28J60: a register/bank/buffer SPI protocol model, not a network
+    // stack -- see sim/devices/enc28j60.h for the exact scope.
+    SIM_API int sim_enable_enc28j60(sim_handle_t aSim, int aCsPort, int aCsBit,
+                                     int aSckPort, int aSckBit,
+                                     int aMosiPort, int aMosiBit,
+                                     int aMisoPort, int aMisoBit);
+    SIM_API int sim_enc28j60_get_register(sim_handle_t aSim, int aBank, int aAddress);
+    SIM_API int sim_enc28j60_get_bank(sim_handle_t aSim);
+    SIM_API int sim_enc28j60_get_last_opcode(sim_handle_t aSim);
+    SIM_API unsigned long sim_enc28j60_get_buffer_byte_count(sim_handle_t aSim);
+
     // UART TX capture (RX, i.e. the reverse direction, is injected with
     // sim_uart_inject_rx -- there is no separate "enable", the core
     // simulates UART TX unconditionally).
