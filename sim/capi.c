@@ -10,6 +10,8 @@
 #include "devices/hd44780.h"
 #include "devices/ds1302.h"
 #include "devices/xpt2046.h"
+#include "devices/servo.h"
+#include "devices/enc28j60.h"
 #include "boards/hc6800_es.h"
 
 #define MAX_EXCEPTIONS 64
@@ -37,6 +39,8 @@ struct sim
     hd44780_t *lcd;
     ds1302_t *ds1302;
     xpt2046_t *xpt2046;
+    servo_t *servo; // external peripheral, not board-catalog: see capi.h
+    enc28j60_t *enc28j60;
 
     int exceptions[MAX_EXCEPTIONS];
     int exception_count;
@@ -130,6 +134,10 @@ void sim_close(sim_handle_t aSim)
         ds1302_destroy(s->ds1302);
     if (s->xpt2046)
         xpt2046_destroy(s->xpt2046);
+    if (s->servo)
+        servo_destroy(s->servo);
+    if (s->enc28j60)
+        enc28j60_destroy(s->enc28j60);
     bus_destroy(s->bus);
     free(s->cpu.mCodeMem);
     free(s->cpu.mExtData);
@@ -194,6 +202,8 @@ static void post_tick(struct sim *s)
         hd44780_step(s->lcd);
     if (s->ds1302)
         ds1302_step(s->ds1302);
+    if (s->servo)
+        servo_step(s->servo);
     if (s->cpu.serial_out_idx != s->last_tx_idx)
     {
         // Can only ever differ by one byte per tick (transmitting a byte
@@ -433,6 +443,92 @@ int sim_xpt2046_get_last_channel(sim_handle_t aSim)
     if (!s->xpt2046)
         return -1;
     return xpt2046_get_last_channel(s->xpt2046);
+}
+
+int sim_enable_servo(sim_handle_t aSim, int aPwmPortIndex, int aPwmBit,
+                      int aPulseMinUs, int aPulseMaxUs)
+{
+    struct sim *s = (struct sim *)aSim;
+    pin_t pwm;
+    if (s->servo)
+        return 0;
+    if (aPwmPortIndex < 0 || aPwmPortIndex > 3 || aPwmBit < 0 || aPwmBit > 7)
+        return -1;
+    pwm = pin_make((uint8_t)(aPwmPortIndex * 0x10), (uint8_t)aPwmBit);
+    s->servo = servo_create(s->bus, &s->cpu, pwm, s->clock_hz,
+                             (uint16_t)aPulseMinUs, (uint16_t)aPulseMaxUs);
+    return 0;
+}
+
+int sim_servo_get_pulse_us(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->servo)
+        return 0;
+    return servo_get_pulse_us(s->servo);
+}
+
+int sim_servo_get_angle_decidegrees(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->servo)
+        return 0;
+    return servo_get_angle_decidegrees(s->servo);
+}
+
+int sim_enable_enc28j60(sim_handle_t aSim, int aCsPort, int aCsBit,
+                         int aSckPort, int aSckBit,
+                         int aMosiPort, int aMosiBit,
+                         int aMisoPort, int aMisoBit)
+{
+    struct sim *s = (struct sim *)aSim;
+    enc28j60_pins_t pins;
+    int ports[4] = {aCsPort, aSckPort, aMosiPort, aMisoPort};
+    int bits[4] = {aCsBit, aSckBit, aMosiBit, aMisoBit};
+    int i;
+    if (s->enc28j60)
+        return 0;
+    for (i = 0; i < 4; i++)
+        if (ports[i] < 0 || ports[i] > 3 || bits[i] < 0 || bits[i] > 7)
+            return -1;
+    pins.cs = pin_make((uint8_t)(aCsPort * 0x10), (uint8_t)aCsBit);
+    pins.sck = pin_make((uint8_t)(aSckPort * 0x10), (uint8_t)aSckBit);
+    pins.mosi = pin_make((uint8_t)(aMosiPort * 0x10), (uint8_t)aMosiBit);
+    pins.miso = pin_make((uint8_t)(aMisoPort * 0x10), (uint8_t)aMisoBit);
+    s->enc28j60 = enc28j60_create(s->bus, &s->cpu, pins);
+    return 0;
+}
+
+int sim_enc28j60_get_register(sim_handle_t aSim, int aBank, int aAddress)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return 0;
+    return enc28j60_get_register(s->enc28j60, aBank, aAddress);
+}
+
+int sim_enc28j60_get_bank(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return 0;
+    return enc28j60_get_bank(s->enc28j60);
+}
+
+int sim_enc28j60_get_last_opcode(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return 0;
+    return enc28j60_get_last_opcode(s->enc28j60);
+}
+
+unsigned long sim_enc28j60_get_buffer_byte_count(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return 0;
+    return enc28j60_get_buffer_byte_count(s->enc28j60);
 }
 
 int sim_uart_tx_count(sim_handle_t aSim)

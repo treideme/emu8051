@@ -139,6 +139,24 @@ class _CAPI:
             lib.sim_uart_tx_byte.argtypes = [HANDLE, ctypes.c_int]
             lib.sim_uart_inject_rx.argtypes = [HANDLE, ctypes.c_ubyte]
 
+            lib.sim_enable_servo.restype = ctypes.c_int
+            lib.sim_enable_servo.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            lib.sim_servo_get_pulse_us.restype = ctypes.c_int
+            lib.sim_servo_get_pulse_us.argtypes = [HANDLE]
+            lib.sim_servo_get_angle_decidegrees.restype = ctypes.c_int
+            lib.sim_servo_get_angle_decidegrees.argtypes = [HANDLE]
+
+            lib.sim_enable_enc28j60.restype = ctypes.c_int
+            lib.sim_enable_enc28j60.argtypes = [HANDLE] + [ctypes.c_int] * 8
+            lib.sim_enc28j60_get_register.restype = ctypes.c_int
+            lib.sim_enc28j60_get_register.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int]
+            lib.sim_enc28j60_get_bank.restype = ctypes.c_int
+            lib.sim_enc28j60_get_bank.argtypes = [HANDLE]
+            lib.sim_enc28j60_get_last_opcode.restype = ctypes.c_int
+            lib.sim_enc28j60_get_last_opcode.argtypes = [HANDLE]
+            lib.sim_enc28j60_get_buffer_byte_count.restype = ctypes.c_ulong
+            lib.sim_enc28j60_get_buffer_byte_count.argtypes = [HANDLE]
+
             cls._lib = lib
         return cls._lib
 
@@ -289,3 +307,35 @@ class Simulator:
 
     def uart_inject_rx(self, byte: int):
         self._capi.sim_uart_inject_rx(self._handle, byte)
+
+    # --- external peripherals: not part of any board catalog (see
+    # capi.h's own note) -- caller passes its own assumed pin wiring,
+    # port 0-3 for P0-P3, bit 0-7, same convention as set_pin()/get_pin().
+
+    def enable_servo(self, pwm_port: int, pwm_bit: int, pulse_min_us: int = 1000, pulse_max_us: int = 2000):
+        self._capi.sim_enable_servo(self._handle, pwm_port, pwm_bit, pulse_min_us, pulse_max_us)
+
+    def servo_pulse_us(self) -> int:
+        return self._capi.sim_servo_get_pulse_us(self._handle)
+
+    def servo_angle_decidegrees(self) -> int:
+        """Tenths of a degree, 0-1800, so a caller doesn't need floats."""
+        return self._capi.sim_servo_get_angle_decidegrees(self._handle)
+
+    def enable_enc28j60(self, cs, sck, mosi, miso):
+        """Each of cs/sck/mosi/miso is a (port, bit) tuple."""
+        self._capi.sim_enable_enc28j60(
+            self._handle, cs[0], cs[1], sck[0], sck[1], mosi[0], mosi[1], miso[0], miso[1]
+        )
+
+    def enc28j60_register(self, bank: int, address: int) -> int:
+        return self._capi.sim_enc28j60_get_register(self._handle, bank, address)
+
+    def enc28j60_bank(self) -> int:
+        return self._capi.sim_enc28j60_get_bank(self._handle)
+
+    def enc28j60_last_opcode(self) -> int:
+        return self._capi.sim_enc28j60_get_last_opcode(self._handle)
+
+    def enc28j60_buffer_byte_count(self) -> int:
+        return self._capi.sim_enc28j60_get_buffer_byte_count(self._handle)

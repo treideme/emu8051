@@ -11,10 +11,14 @@
  *
  * Usage: sim_test <hexfile> <instructions> [lcd] [digits=N] [adc=VALUE]
  *                 [ds1302=SS,MM,HH,DD,MO,WD,YY] [clock_hz=N]
+ *                 [servo=PORT,BIT[,MIN_US,MAX_US]]
+ *                 [enc28j60=CS_P,CS_B,SCK_P,SCK_B,MOSI_P,MOSI_B,MISO_P,MISO_B]
  *   e.g. sim_test 18_lcd_name_id.hex 500000 lcd
  *        sim_test 17_digit_tube_student_id.hex 200000 digits=8
  *        sim_test 3432_clock_digit_tube_2.hex 500000 digits=8 ds1302=30,15,9,14,9,7,25
  *        sim_test 344_clock_lcd.hex 500000 lcd ds1302=0,0,0,1,1,1,25 clock_hz=10000000
+ *        sim_test 05_enc_servo.hex 500000 servo=3,7
+ *        sim_test 09_ethernet.hex 500000 enc28j60=0,3,0,2,0,0,0,1
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +36,10 @@ int main(int argc, char **argv)
     int want_ds1302 = 0;
     int ds1302_fields[7] = {0, 0, 0, 1, 1, 1, 0}; // sec,min,hour,date,month,weekday,year
     unsigned long clock_hz = 0; // 0 = leave the board's own default
+    int want_servo = 0;
+    int servo_fields[4] = {0, 0, 1000, 2000}; // port,bit,min_us,max_us
+    int want_enc28j60 = 0;
+    int enc28j60_fields[8] = {0, 3, 0, 2, 0, 0, 0, 1}; // cs,sck,mosi,miso port/bit pairs
     int i;
 
     if (argc < 3)
@@ -69,6 +77,36 @@ int main(int argc, char **argv)
         }
         else if (strncmp(argv[i], "clock_hz=", 9) == 0)
             clock_hz = strtoul(argv[i] + 9, NULL, 10);
+        else if (strncmp(argv[i], "servo=", 6) == 0)
+        {
+            char buf[64];
+            char *tok;
+            int f = 0;
+            strncpy(buf, argv[i] + 6, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            tok = strtok(buf, ",");
+            while (tok && f < 4)
+            {
+                servo_fields[f++] = atoi(tok);
+                tok = strtok(NULL, ",");
+            }
+            want_servo = 1;
+        }
+        else if (strncmp(argv[i], "enc28j60=", 9) == 0)
+        {
+            char buf[64];
+            char *tok;
+            int f = 0;
+            strncpy(buf, argv[i] + 9, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            tok = strtok(buf, ",");
+            while (tok && f < 8)
+            {
+                enc28j60_fields[f++] = atoi(tok);
+                tok = strtok(NULL, ",");
+            }
+            want_enc28j60 = 1;
+        }
     }
 
     sim = sim_open("hc6800_es");
@@ -100,6 +138,13 @@ int main(int argc, char **argv)
         sim_ds1302_set_time(sim, ds1302_fields[0], ds1302_fields[1], ds1302_fields[2],
                              ds1302_fields[3], ds1302_fields[4], ds1302_fields[5], ds1302_fields[6]);
     }
+    if (want_servo)
+        sim_enable_servo(sim, servo_fields[0], servo_fields[1], servo_fields[2], servo_fields[3]);
+    if (want_enc28j60)
+        sim_enable_enc28j60(sim, enc28j60_fields[0], enc28j60_fields[1],
+                             enc28j60_fields[2], enc28j60_fields[3],
+                             enc28j60_fields[4], enc28j60_fields[5],
+                             enc28j60_fields[6], enc28j60_fields[7]);
 
     {
         long done = sim_step_instructions(sim, instructions);
@@ -140,6 +185,15 @@ int main(int argc, char **argv)
 
     if (want_adc)
         printf("adc last channel requested: %d\n", sim_xpt2046_get_last_channel(sim));
+
+    if (want_servo)
+        printf("servo pulse_us=%d angle_decidegrees=%d\n",
+               sim_servo_get_pulse_us(sim), sim_servo_get_angle_decidegrees(sim));
+
+    if (want_enc28j60)
+        printf("enc28j60 bank=%d last_opcode=0x%02x buffer_bytes=%lu\n",
+               sim_enc28j60_get_bank(sim), sim_enc28j60_get_last_opcode(sim),
+               sim_enc28j60_get_buffer_byte_count(sim));
 
     {
         int uart_n = sim_uart_tx_count(sim);
