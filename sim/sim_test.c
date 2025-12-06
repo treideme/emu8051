@@ -13,12 +13,14 @@
  *                 [ds1302=SS,MM,HH,DD,MO,WD,YY] [clock_hz=N]
  *                 [servo=PORT,BIT[,MIN_US,MAX_US]]
  *                 [enc28j60=CS_P,CS_B,SCK_P,SCK_B,MOSI_P,MOSI_B,MISO_P,MISO_B]
+ *                 [fan=PWM_PORT,PWM_BIT,TACH_PORT,TACH_BIT]
  *   e.g. sim_test 18_lcd_name_id.hex 500000 lcd
  *        sim_test 17_digit_tube_student_id.hex 200000 digits=8
  *        sim_test 3432_clock_digit_tube_2.hex 500000 digits=8 ds1302=30,15,9,14,9,7,25
  *        sim_test 344_clock_lcd.hex 500000 lcd ds1302=0,0,0,1,1,1,25 clock_hz=10000000
  *        sim_test 05_enc_servo.hex 500000 servo=3,7
  *        sim_test 09_ethernet.hex 500000 enc28j60=0,3,0,2,0,0,0,1
+ *        sim_test 06_fan_tach.hex 500000 fan=1,0,1,1
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +42,8 @@ int main(int argc, char **argv)
     int servo_fields[4] = {0, 0, 1000, 2000}; // port,bit,min_us,max_us
     int want_enc28j60 = 0;
     int enc28j60_fields[8] = {0, 3, 0, 2, 0, 0, 0, 1}; // cs,sck,mosi,miso port/bit pairs
+    int want_fan = 0;
+    int fan_fields[4] = {1, 0, 1, 1}; // pwm_port,pwm_bit,tach_port,tach_bit
     int i;
 
     if (argc < 3)
@@ -107,6 +111,21 @@ int main(int argc, char **argv)
             }
             want_enc28j60 = 1;
         }
+        else if (strncmp(argv[i], "fan=", 4) == 0)
+        {
+            char buf[64];
+            char *tok;
+            int f = 0;
+            strncpy(buf, argv[i] + 4, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            tok = strtok(buf, ",");
+            while (tok && f < 4)
+            {
+                fan_fields[f++] = atoi(tok);
+                tok = strtok(NULL, ",");
+            }
+            want_fan = 1;
+        }
     }
 
     sim = sim_open("hc6800_es");
@@ -145,6 +164,8 @@ int main(int argc, char **argv)
                              enc28j60_fields[2], enc28j60_fields[3],
                              enc28j60_fields[4], enc28j60_fields[5],
                              enc28j60_fields[6], enc28j60_fields[7]);
+    if (want_fan)
+        sim_enable_fan(sim, fan_fields[0], fan_fields[1], fan_fields[2], fan_fields[3]);
 
     {
         long done = sim_step_instructions(sim, instructions);
@@ -194,6 +215,10 @@ int main(int argc, char **argv)
         printf("enc28j60 bank=%d last_opcode=0x%02x buffer_bytes=%lu\n",
                sim_enc28j60_get_bank(sim), sim_enc28j60_get_last_opcode(sim),
                sim_enc28j60_get_buffer_byte_count(sim));
+
+    if (want_fan)
+        printf("fan duty_percent=%d rpm=%d\n",
+               sim_fan_get_duty_percent(sim), sim_fan_get_rpm(sim));
 
     {
         int uart_n = sim_uart_tx_count(sim);

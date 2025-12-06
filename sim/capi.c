@@ -12,6 +12,7 @@
 #include "devices/xpt2046.h"
 #include "devices/servo.h"
 #include "devices/enc28j60.h"
+#include "devices/fan.h"
 #include "boards/hc6800_es.h"
 
 #define MAX_EXCEPTIONS 64
@@ -41,6 +42,7 @@ struct sim
     xpt2046_t *xpt2046;
     servo_t *servo; // external peripheral, not board-catalog: see capi.h
     enc28j60_t *enc28j60;
+    fan_t *fan;
 
     int exceptions[MAX_EXCEPTIONS];
     int exception_count;
@@ -138,6 +140,8 @@ void sim_close(sim_handle_t aSim)
         servo_destroy(s->servo);
     if (s->enc28j60)
         enc28j60_destroy(s->enc28j60);
+    if (s->fan)
+        fan_destroy(s->fan);
     bus_destroy(s->bus);
     free(s->cpu.mCodeMem);
     free(s->cpu.mExtData);
@@ -204,6 +208,8 @@ static void post_tick(struct sim *s)
         ds1302_step(s->ds1302);
     if (s->servo)
         servo_step(s->servo);
+    if (s->fan)
+        fan_step(s->fan);
     if (s->cpu.serial_out_idx != s->last_tx_idx)
     {
         // Can only ever differ by one byte per tick (transmitting a byte
@@ -497,6 +503,38 @@ int sim_enable_enc28j60(sim_handle_t aSim, int aCsPort, int aCsBit,
     pins.miso = pin_make((uint8_t)(aMisoPort * 0x10), (uint8_t)aMisoBit);
     s->enc28j60 = enc28j60_create(s->bus, &s->cpu, pins);
     return 0;
+}
+
+int sim_enable_fan(sim_handle_t aSim, int aPwmPort, int aPwmBit,
+                    int aTachPort, int aTachBit)
+{
+    struct sim *s = (struct sim *)aSim;
+    pin_t pwm, tach;
+    if (s->fan)
+        return 0;
+    if (aPwmPort < 0 || aPwmPort > 3 || aPwmBit < 0 || aPwmBit > 7 ||
+        aTachPort < 0 || aTachPort > 3 || aTachBit < 0 || aTachBit > 7)
+        return -1;
+    pwm = pin_make((uint8_t)(aPwmPort * 0x10), (uint8_t)aPwmBit);
+    tach = pin_make((uint8_t)(aTachPort * 0x10), (uint8_t)aTachBit);
+    s->fan = fan_create(s->bus, &s->cpu, pwm, tach, s->clock_hz);
+    return 0;
+}
+
+int sim_fan_get_duty_percent(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->fan)
+        return 0;
+    return fan_get_duty_percent(s->fan);
+}
+
+int sim_fan_get_rpm(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->fan)
+        return 0;
+    return fan_get_rpm(s->fan);
 }
 
 int sim_enc28j60_get_register(sim_handle_t aSim, int aBank, int aAddress)
