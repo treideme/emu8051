@@ -157,6 +157,13 @@ class _CAPI:
             lib.sim_enc28j60_get_buffer_byte_count.restype = ctypes.c_ulong
             lib.sim_enc28j60_get_buffer_byte_count.argtypes = [HANDLE]
 
+            lib.sim_enable_fan.restype = ctypes.c_int
+            lib.sim_enable_fan.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            lib.sim_fan_get_duty_percent.restype = ctypes.c_int
+            lib.sim_fan_get_duty_percent.argtypes = [HANDLE]
+            lib.sim_fan_get_rpm.restype = ctypes.c_int
+            lib.sim_fan_get_rpm.argtypes = [HANDLE]
+
             cls._lib = lib
         return cls._lib
 
@@ -339,3 +346,13 @@ class Simulator:
 
     def enc28j60_buffer_byte_count(self) -> int:
         return self._capi.sim_enc28j60_get_buffer_byte_count(self._handle)
+
+    def enable_fan(self, pwm, tach):
+        """Each of pwm/tach is a (port, bit) tuple."""
+        self._capi.sim_enable_fan(self._handle, pwm[0], pwm[1], tach[0], tach[1])
+
+    def fan_duty_percent(self) -> int:
+        return self._capi.sim_fan_get_duty_percent(self._handle)
+
+    def fan_rpm(self) -> int:
+        return self._capi.sim_fan_get_rpm(self._handle)
