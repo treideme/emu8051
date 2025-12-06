@@ -1,7 +1,8 @@
-"""unittest coverage for sim/devices/servo.c and sim/devices/enc28j60.c --
-peripherals that are NOT part of the HC6800-ES board (see sim/README.md's
-"plugin vs board definition" note), so unlike test_hc6800_es.py's coverage
-these are enabled with an explicit pin, not a zero-argument enable_*().
+"""unittest coverage for sim/devices/servo.c, sim/devices/enc28j60.c, and
+sim/devices/fan.c -- peripherals that are NOT part of the HC6800-ES board
+(see sim/README.md's "plugin vs board definition" note), so unlike
+test_hc6800_es.py's coverage these are enabled with an explicit pin, not
+a zero-argument enable_*().
 
 Both need real compiled firmware to drive their pins as outputs (a test
 can't synthesize an output pulse via Simulator.set_pin() -- that overrides
@@ -120,6 +121,54 @@ class Enc28j60Tests(unittest.TestCase):
             self.assertEqual(sim.enc28j60_buffer_byte_count(), 8)
             self.assertEqual(sim.enc28j60_register(0, 0x00), 4, "ERDPTL should have advanced by exactly 4")
             self.assertEqual(sim.enc28j60_register(0, 0x02), 4, "EWRPTL should have advanced by exactly 4")
+
+
+class FanTests(unittest.TestCase):
+    # 06_fan_tach.hex cycles through duty_table = {30, 50, 70, 100} every
+    # 4 (firmware-measured) seconds -- see 06_fan_tach/main.c. At this
+    # sim's default 12MHz clock_hz, one real second is clock_hz/12 =
+    # 1,000,000 ticks, so instruction counts below are picked to land
+    # comfortably inside a given step's ~4-second window (not right on a
+    # boundary), using this board's own measured ~1.04 ticks/instruction.
+    PINS = {"pwm": (1, 6), "tach": (1, 7)}
+
+    @skip_unless_built("06_fan_tach.hex")
+    def test_first_duty_step_and_matching_rpm(self):
+        with Simulator("hc6800_es", hexpath("06_fan_tach.hex")) as sim:
+            sim.enable_fan(**self.PINS)
+            sim.step_instructions(3_000_000)  # well inside [0s, 4s): duty_table[0]=30
+
+            duty = sim.fan_duty_percent()
+            self.assertAlmostEqual(duty, 30, delta=5)
+            # fan.c's own documented mapping: 0 RPM below
+            # FAN_MIN_START_DUTY_PERCENT(20), else linear up to
+            # FAN_MAX_RPM(8000) at 100% -- checked against the *measured*
+            # duty (not the nominal target) so this only tests the
+            # model's internal consistency, not firmware timing precision.
+            expected_rpm = 8000 * (duty - 20) // 80
+            self.assertAlmostEqual(sim.fan_rpm(), expected_rpm, delta=50)
+
+    @skip_unless_built("06_fan_tach.hex")
+    def test_later_duty_step_and_matching_rpm(self):
+        with Simulator("hc6800_es", hexpath("06_fan_tach.hex")) as sim:
+            sim.enable_fan(**self.PINS)
+            sim.step_instructions(13_000_000)  # well inside [12s, 16s): duty_table[3]=100
+
+            duty = sim.fan_duty_percent()
+            self.assertGreater(duty, 70, "should be well past the 70% step by now")
+            expected_rpm = 8000 * (duty - 20) // 80
+            self.assertAlmostEqual(sim.fan_rpm(), expected_rpm, delta=50)
+
+    @skip_unless_built("06_fan_tach.hex")
+    def test_rpm_increases_from_first_to_later_step(self):
+        with Simulator("hc6800_es", hexpath("06_fan_tach.hex")) as sim:
+            sim.enable_fan(**self.PINS)
+            sim.step_instructions(3_000_000)
+            early_rpm = sim.fan_rpm()
+            sim.step_instructions(10_000_000)  # now at ~13M total, inside [12s, 16s)
+            late_rpm = sim.fan_rpm()
+            self.assertGreater(late_rpm, early_rpm + 1000,
+                                "RPM should climb substantially as duty steps up")
 
 
 if __name__ == "__main__":

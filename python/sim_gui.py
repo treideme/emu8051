@@ -106,6 +106,51 @@ class ServoView(QWidget):
         painter.drawText(0, 4, w, 16, Qt.AlignCenter, f"{self._angle_deg:.0f}°")
 
 
+class FanView(QWidget):
+    """A spinning 4-blade glyph whose rotation rate reflects RPM, plus a
+    numeric readout -- not an HC6800-ES peripheral (see sim/README.md's
+    "plugin vs board definition" note), so this only appears when the Fan
+    checkbox is on. The spin rate is visually proportional to RPM, not
+    frame-accurate to any real elapsed time (see sim/devices/fan.h for why
+    RPM itself is already a simplified model, not a real fan curve)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(140, 140)
+        self._rpm = 0
+        self._blade_angle = 0.0
+
+    def set_rpm(self, rpm: int):
+        self._rpm = rpm
+        self._blade_angle = (self._blade_angle + rpm / 60.0) % 360.0
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, (h - 20) // 2
+        radius = min(w, h - 20) // 2 - 10
+
+        painter.translate(cx, cy)
+        painter.rotate(self._blade_angle)
+        painter.setBrush(QColor("#37a"))
+        painter.setPen(QPen(QColor("#8bd"), 1))
+        for i in range(4):
+            painter.save()
+            painter.rotate(i * 90)
+            painter.drawEllipse(-radius // 4, -radius, radius // 2, radius)
+            painter.restore()
+        painter.resetTransform()
+
+        painter.setBrush(QColor("#333"))
+        painter.setPen(QPen(QColor("#888"), 1))
+        painter.drawEllipse(cx - 6, cy - 6, 12, 12)
+
+        painter.setPen(QColor("white"))
+        painter.drawText(0, h - 18, w, 18, Qt.AlignCenter, f"{self._rpm} RPM")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, args):
         super().__init__()
@@ -126,6 +171,7 @@ class MainWindow(QMainWindow):
         self._servo_pin = tuple(args.servo[:2]) if args.servo else (3, 7)
         self._servo_range = tuple(args.servo[2:]) if args.servo and len(args.servo) > 2 else (1000, 2000)
         self._enc28j60_pins = args.enc28j60 if args.enc28j60 else (0, 3, 0, 2, 0, 0, 0, 1)
+        self._fan_pins = args.fan if args.fan else (1, 6, 1, 7)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -184,7 +230,9 @@ class MainWindow(QMainWindow):
         self.cb_servo.setToolTip("Not an HC6800-ES peripheral -- an assumed pin, see --servo.")
         self.cb_enc28j60 = QCheckBox("ENC28J60")
         self.cb_enc28j60.setToolTip("Not an HC6800-ES peripheral -- assumed pins, see --enc28j60.")
-        for cb in (self.cb_lcd, self.cb_digits, self.cb_ds1302, self.cb_adc, self.cb_servo, self.cb_enc28j60):
+        self.cb_fan = QCheckBox(f"Fan (P{self._fan_pins[0]}.{self._fan_pins[1]}/P{self._fan_pins[2]}.{self._fan_pins[3]})")
+        self.cb_fan.setToolTip("Not an HC6800-ES peripheral -- assumed pins, see --fan.")
+        for cb in (self.cb_lcd, self.cb_digits, self.cb_ds1302, self.cb_adc, self.cb_servo, self.cb_enc28j60, self.cb_fan):
             cb.toggled.connect(self.apply_peripherals)
             peri.addWidget(cb)
         peri.addStretch(1)
@@ -239,6 +287,15 @@ class MainWindow(QMainWindow):
         enc_layout.addWidget(self.enc28j60_activity_label)
         mid.addWidget(self.enc28j60_box)
 
+        self.fan_box = QGroupBox("Fan")
+        fan_layout = QVBoxLayout(self.fan_box)
+        self.fan_view = FanView()
+        fan_layout.addWidget(self.fan_view)
+        self.fan_duty_label = QLabel("duty: -- %")
+        self.fan_duty_label.setAlignment(Qt.AlignCenter)
+        fan_layout.addWidget(self.fan_duty_label)
+        mid.addWidget(self.fan_box)
+
         root.addLayout(mid)
 
         # Panels for a peripheral that isn't enabled get grayed out rather
@@ -248,10 +305,12 @@ class MainWindow(QMainWindow):
         self.lcd_box.setEnabled(self.cb_lcd.isChecked())
         self.servo_box.setEnabled(self.cb_servo.isChecked())
         self.enc28j60_box.setEnabled(self.cb_enc28j60.isChecked())
+        self.fan_box.setEnabled(self.cb_fan.isChecked())
         self.cb_digits.toggled.connect(self.digit_box.setEnabled)
         self.cb_lcd.toggled.connect(self.lcd_box.setEnabled)
         self.cb_servo.toggled.connect(self.servo_box.setEnabled)
         self.cb_enc28j60.toggled.connect(self.enc28j60_box.setEnabled)
+        self.cb_fan.toggled.connect(self.fan_box.setEnabled)
 
         # --- UART log ---
         uart_box = QGroupBox("UART TX log")
@@ -274,6 +333,7 @@ class MainWindow(QMainWindow):
         self.cb_adc.setChecked(args.adc)
         self.cb_servo.setChecked(args.servo is not None)
         self.cb_enc28j60.setChecked(args.enc28j60 is not None)
+        self.cb_fan.setChecked(args.fan is not None)
         self.cb_realtime.setChecked(args.realtime)
 
         if args.hexfile:
@@ -313,6 +373,10 @@ class MainWindow(QMainWindow):
             cs, sck, mosi, miso = self._enc28j60_pins[0:2], self._enc28j60_pins[2:4], \
                 self._enc28j60_pins[4:6], self._enc28j60_pins[6:8]
             self.sim.enable_enc28j60(cs, sck, mosi, miso)
+        if self.cb_fan.isChecked():
+            pwm = self._fan_pins[0:2]
+            tach = self._fan_pins[2:4]
+            self.sim.enable_fan(pwm, tach)
 
     def reset_sim(self):
         if not self.sim:
@@ -390,6 +454,10 @@ class MainWindow(QMainWindow):
             self._last_enc28j60_buffer_bytes = buffer_bytes
             self.enc28j60_activity_label.setStyleSheet(f"color: {'#3f3' if active else '#333'}")
 
+        if self.cb_fan.isChecked():
+            self.fan_view.set_rpm(self.sim.fan_rpm())
+            self.fan_duty_label.setText(f"duty: {self.sim.fan_duty_percent()} %")
+
         tx = self.sim.uart_tx_bytes()
         if len(tx) > self._uart_seen:
             new = tx[self._uart_seen :]
@@ -449,6 +517,12 @@ def parse_args(argv):
         help="enable the ENC28J60 at startup on these SPI pins -- not an HC6800-ES peripheral, "
              "see sim/README.md (default if the box is checked with no --enc28j60: P0.3/P0.2/P0.0/P0.1, "
              "matching the sibling demo repo's 09_ethernet.hex)",
+    )
+    parser.add_argument(
+        "--fan", type=pin_list((4,)), default=None, metavar="PWM_P,PWM_B,TACH_P,TACH_B",
+        help="enable the fan at startup on these PWM/tach pins -- not an HC6800-ES peripheral, "
+             "see sim/README.md (default if the box is checked with no --fan: P1.6/P1.7, "
+             "matching the sibling demo repo's 06_fan_tach.hex)",
     )
     return parser.parse_args(argv)
 
