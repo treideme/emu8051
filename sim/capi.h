@@ -161,6 +161,15 @@ extern "C"
     SIM_API int sim_enc28j60_get_last_opcode(sim_handle_t aSim);
     SIM_API unsigned long sim_enc28j60_get_buffer_byte_count(sim_handle_t aSim);
 
+    // 4-wire PWM fan: aPwmPort/aPwmBit is the MCU-driven duty-cycle input,
+    // aTachPort/aTachBit is the fan-driven tachometer output -- see
+    // sim/devices/fan.h for the RPM-mapping/pulses-per-revolution
+    // assumptions.
+    SIM_API int sim_enable_fan(sim_handle_t aSim, int aPwmPort, int aPwmBit,
+                               int aTachPort, int aTachBit);
+    SIM_API int sim_fan_get_duty_percent(sim_handle_t aSim); // 0-100
+    SIM_API int sim_fan_get_rpm(sim_handle_t aSim);
+
     // UART TX capture (RX, i.e. the reverse direction, is injected with
     // sim_uart_inject_rx -- there is no separate "enable", the core
     // simulates UART TX unconditionally).
