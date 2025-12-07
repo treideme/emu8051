@@ -171,20 +171,21 @@ device model's own code:
   `sim_enable_lcd()`/`sim_enable_ds1302()`/etc take no pin arguments at
   all -- they just reach into that one board's catalog, because on this
   board there's only one legitimate answer to "which pins is the LCD on".
-- **External peripheral plugins** (the servo, the ENC28J60) are *not* on
-  the real board at all -- there's no servo header and no Ethernet module
-  on an HC6800-ES. A project that wants one has to invent a wiring
-  assumption for it (see the sibling demo repo's `05_enc_servo/enc.c` and
-  `09_ethernet/enc28j60_cfg.h` for what each one actually picked, and
-  why). Because that pin choice is a per-project invention rather than a
-  board fact, it does not belong in `sim/boards/hc6800_es.c` -- baking a
+- **External peripheral plugins** (the servo, the ENC28J60, the fan) are
+  *not* on the real board at all -- there's no servo header, no Ethernet
+  module, and no fan header on an HC6800-ES. A project that wants one has
+  to invent a wiring assumption for it (see the sibling demo repo's
+  `05_enc_servo/enc.c`, `09_ethernet/enc28j60_cfg.h`, and
+  `06_fan_tach/main.c` for what each one actually picked, and why).
+  Because that pin choice is a per-project invention rather than a board
+  fact, it does not belong in `sim/boards/hc6800_es.c` -- baking a
   made-up pin into the board catalog would make it look like a real
   HC6800-ES fact to the next reader. Instead, `capi.c`'s
-  `sim_enable_servo()`/`sim_enable_enc28j60()` take the pin(s) as
-  explicit `(port, bit)` arguments (`sim_gui.py --servo`/`--enc28j60`
-  mirror this), and the *caller* -- a project's own test, or whoever
-  points the GUI at that project's `.hex` -- is the one who knows what
-  pin that particular project assumed.
+  `sim_enable_servo()`/`sim_enable_enc28j60()`/`sim_enable_fan()` take the
+  pin(s) as explicit `(port, bit)` arguments (`sim_gui.py
+  --servo`/`--enc28j60`/`--fan` mirror this), and the *caller* -- a
+  project's own test, or whoever points the GUI at that project's `.hex`
+  -- is the one who knows what pin that particular project assumed.
 
 The device models themselves don't know or care which category they're
 in -- both kinds are written purely in terms of `pin_t` (see "Adding a
@@ -211,6 +212,22 @@ each wire it to their own pin.
   2000us for a standard hobby servo). No mechanical model -- it reports
   the angle a real servo would be *commanded* to, not simulated inertia
   or torque.
+- Fan (external plugin): a 4-wire PC-style PWM fan model, in two
+  independent halves. PWM decode measures the last full cycle on the
+  watched pin and reports a 0-100% duty cycle -- it doesn't care what
+  frequency the firmware actually drives (a bit-banged 8051 won't hit a
+  real fan's ~25kHz PWM spec, and doesn't need to for this to work).
+  Tachometer generation drives a pulse train back at
+  `FAN_PULSES_PER_REV`(2, the near-universal convention for a 2-pole
+  4-wire fan's open-collector tach -- the Waveshare Fan-4020-PWM-5V this
+  was grounded against doesn't specify it) pulses per simulated
+  revolution, at an RPM that responds to the *measured* duty cycle via a
+  simple linear mapping between `FAN_MIN_START_DUTY_PERCENT`(20, below
+  which the model assumes the fan doesn't spin, matching real fans'
+  typical minimum-start-duty behavior) and `FAN_MAX_RPM`(8000, an assumed
+  ceiling for a small 40mm 5V fan). No spin-up/spin-down inertia, no real
+  fan curve, RPM tracks a duty-cycle change instantly -- see
+  `sim/devices/fan.h`'s own header comment for the full reasoning.
 - ENC28J60 (external plugin): a register/bank/buffer *protocol* model --
   the bit-banged SPI mode-0 shift register, the 4-bank x 32-slot control-
   register file (with the five all-bank registers shared across banks,
