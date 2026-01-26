@@ -12,11 +12,12 @@ sim/capi.h for why this project didn't reach for an async/callback API.
 Usage: python sim_gui.py [hexfile] [options] -- see --help.
 """
 import argparse
+import math
 import sys
 import time
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -67,6 +68,44 @@ class PortView(QWidget):
             bit.setPalette(pal)
 
 
+class ServoView(QWidget):
+    """A rotating arrow over a 0-180 degree arc, plus a numeric readout --
+    not an HC6800-ES peripheral (see sim/README.md's "plugin vs board
+    definition" note), so this only appears when the Servo checkbox is on."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(160, 110)
+        self._angle_deg = 0.0
+
+    def set_angle_decidegrees(self, decidegrees: int):
+        self._angle_deg = decidegrees / 10.0
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h - 14
+        radius = min(w // 2, h) - 20
+
+        painter.setPen(QPen(QColor("#666"), 2))
+        painter.drawArc(cx - radius, cy - radius, radius * 2, radius * 2, 0, 180 * 16)
+
+        theta = math.radians(180 - self._angle_deg)  # 0deg points right, 180deg points left
+        x2 = cx + radius * math.cos(theta)
+        y2 = cy - radius * math.sin(theta)
+        painter.setPen(QPen(QColor("#e33"), 3))
+        painter.drawLine(cx, cy, int(x2), int(y2))
+
+        painter.setBrush(QColor("#444"))
+        painter.setPen(QPen(QColor("#888"), 1))
+        painter.drawEllipse(cx - 8, cy - 8, 16, 16)
+
+        painter.setPen(QColor("white"))
+        painter.drawText(0, 4, w, 16, Qt.AlignCenter, f"{self._angle_deg:.0f}°")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, args):
         super().__init__()
@@ -75,6 +114,18 @@ class MainWindow(QMainWindow):
         self._digit_count = args.digits if args.digits else 8
         self._clock_hz = args.clock_hz
         self._last_wall_time = None
+        self._last_enc28j60_buffer_bytes = 0
+
+        # External peripherals -- not part of the HC6800-ES board, so
+        # (unlike enable_lcd()/enable_ds1302()/etc) there's no board
+        # constant to default to. --servo/--enc28j60 pick a pin; absent
+        # that, default to whichever pin this project's own ported demos
+        # happen to assume (05_enc_servo.hex's P3.7, 09_ethernet.hex's
+        # P0.0-P0.3) since checking the box with nothing else configured
+        # is the common case of "I'm looking at one of those two".
+        self._servo_pin = tuple(args.servo[:2]) if args.servo else (3, 7)
+        self._servo_range = tuple(args.servo[2:]) if args.servo and len(args.servo) > 2 else (1000, 2000)
+        self._enc28j60_pins = args.enc28j60 if args.enc28j60 else (0, 3, 0, 2, 0, 0, 0, 1)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -129,7 +180,11 @@ class MainWindow(QMainWindow):
         self.cb_digits = QCheckBox(f"7-segment ({self._digit_count} digit)")
         self.cb_ds1302 = QCheckBox("DS1302")
         self.cb_adc = QCheckBox("XPT2046 ADC")
-        for cb in (self.cb_lcd, self.cb_digits, self.cb_ds1302, self.cb_adc):
+        self.cb_servo = QCheckBox(f"Servo (P{self._servo_pin[0]}.{self._servo_pin[1]})")
+        self.cb_servo.setToolTip("Not an HC6800-ES peripheral -- an assumed pin, see --servo.")
+        self.cb_enc28j60 = QCheckBox("ENC28J60")
+        self.cb_enc28j60.setToolTip("Not an HC6800-ES peripheral -- assumed pins, see --enc28j60.")
+        for cb in (self.cb_lcd, self.cb_digits, self.cb_ds1302, self.cb_adc, self.cb_servo, self.cb_enc28j60):
             cb.toggled.connect(self.apply_peripherals)
             peri.addWidget(cb)
         peri.addStretch(1)
@@ -162,6 +217,28 @@ class MainWindow(QMainWindow):
             lcd_layout.addWidget(lbl)
         mid.addWidget(self.lcd_box)
 
+        self.servo_box = QGroupBox("Servo")
+        servo_layout = QVBoxLayout(self.servo_box)
+        self.servo_view = ServoView()
+        servo_layout.addWidget(self.servo_view)
+        self.servo_pulse_label = QLabel("pulse: -- us")
+        self.servo_pulse_label.setAlignment(Qt.AlignCenter)
+        servo_layout.addWidget(self.servo_pulse_label)
+        mid.addWidget(self.servo_box)
+
+        self.enc28j60_box = QGroupBox("ENC28J60 (SPI protocol only)")
+        enc_layout = QVBoxLayout(self.enc28j60_box)
+        self.enc28j60_opcode_label = QLabel("opcode: --")
+        self.enc28j60_bank_label = QLabel("bank: --")
+        self.enc28j60_buffer_label = QLabel("buffer bytes: --")
+        self.enc28j60_activity_label = QLabel("●")  # dot, flashes green on buffer activity
+        self.enc28j60_activity_label.setAlignment(Qt.AlignCenter)
+        for lbl in (self.enc28j60_opcode_label, self.enc28j60_bank_label, self.enc28j60_buffer_label):
+            lbl.setFont(MONO)
+            enc_layout.addWidget(lbl)
+        enc_layout.addWidget(self.enc28j60_activity_label)
+        mid.addWidget(self.enc28j60_box)
+
         root.addLayout(mid)
 
         # Panels for a peripheral that isn't enabled get grayed out rather
@@ -169,8 +246,12 @@ class MainWindow(QMainWindow):
         # "enabled but nothing captured yet" look identical.
         self.digit_box.setEnabled(self.cb_digits.isChecked())
         self.lcd_box.setEnabled(self.cb_lcd.isChecked())
+        self.servo_box.setEnabled(self.cb_servo.isChecked())
+        self.enc28j60_box.setEnabled(self.cb_enc28j60.isChecked())
         self.cb_digits.toggled.connect(self.digit_box.setEnabled)
         self.cb_lcd.toggled.connect(self.lcd_box.setEnabled)
+        self.cb_servo.toggled.connect(self.servo_box.setEnabled)
+        self.cb_enc28j60.toggled.connect(self.enc28j60_box.setEnabled)
 
         # --- UART log ---
         uart_box = QGroupBox("UART TX log")
@@ -191,6 +272,8 @@ class MainWindow(QMainWindow):
         self.cb_digits.setChecked(args.digits is not None)
         self.cb_ds1302.setChecked(args.ds1302)
         self.cb_adc.setChecked(args.adc)
+        self.cb_servo.setChecked(args.servo is not None)
+        self.cb_enc28j60.setChecked(args.enc28j60 is not None)
         self.cb_realtime.setChecked(args.realtime)
 
         if args.hexfile:
@@ -224,6 +307,12 @@ class MainWindow(QMainWindow):
             self.sim.enable_ds1302()
         if self.cb_adc.isChecked():
             self.sim.enable_xpt2046()
+        if self.cb_servo.isChecked():
+            self.sim.enable_servo(*self._servo_pin, *self._servo_range)
+        if self.cb_enc28j60.isChecked():
+            cs, sck, mosi, miso = self._enc28j60_pins[0:2], self._enc28j60_pins[2:4], \
+                self._enc28j60_pins[4:6], self._enc28j60_pins[6:8]
+            self.sim.enable_enc28j60(cs, sck, mosi, miso)
 
     def reset_sim(self):
         if not self.sim:
@@ -288,6 +377,19 @@ class MainWindow(QMainWindow):
             self.lcd_lines[0].setText(self.sim.lcd_line(0) or " " * 16)
             self.lcd_lines[1].setText(self.sim.lcd_line(1) or " " * 16)
 
+        if self.cb_servo.isChecked():
+            self.servo_view.set_angle_decidegrees(self.sim.servo_angle_decidegrees())
+            self.servo_pulse_label.setText(f"pulse: {self.sim.servo_pulse_us()} us")
+
+        if self.cb_enc28j60.isChecked():
+            self.enc28j60_opcode_label.setText(f"opcode: 0x{self.sim.enc28j60_last_opcode():02x}")
+            self.enc28j60_bank_label.setText(f"bank: {self.sim.enc28j60_bank()}")
+            buffer_bytes = self.sim.enc28j60_buffer_byte_count()
+            self.enc28j60_buffer_label.setText(f"buffer bytes: {buffer_bytes}")
+            active = buffer_bytes != self._last_enc28j60_buffer_bytes
+            self._last_enc28j60_buffer_bytes = buffer_bytes
+            self.enc28j60_activity_label.setStyleSheet(f"color: {'#3f3' if active else '#333'}")
+
         tx = self.sim.uart_tx_bytes()
         if len(tx) > self._uart_seen:
             new = tx[self._uart_seen :]
@@ -326,6 +428,28 @@ def parse_args(argv):
     )
     parser.add_argument("--ds1302", action="store_true", help="enable the DS1302 RTC at startup")
     parser.add_argument("--adc", action="store_true", help="enable the XPT2046 ADC at startup")
+
+    def pin_list(count):
+        def parse(s):
+            fields = tuple(int(x) for x in s.split(","))
+            if len(fields) not in count:
+                raise argparse.ArgumentTypeError(f"expected {' or '.join(map(str, count))} comma-separated ints")
+            return fields
+        return parse
+
+    parser.add_argument(
+        "--servo", type=pin_list((2, 4)), default=None, metavar="PORT,BIT[,MIN_US,MAX_US]",
+        help="enable the servo at startup on this PWM input pin -- not an HC6800-ES peripheral, "
+             "see sim/README.md (default if the box is checked with no --servo: P3.7, 1000-2000us, "
+             "matching the sibling demo repo's 05_enc_servo.hex)",
+    )
+    parser.add_argument(
+        "--enc28j60", type=pin_list((8,)), default=None,
+        metavar="CS_P,CS_B,SCK_P,SCK_B,MOSI_P,MOSI_B,MISO_P,MISO_B",
+        help="enable the ENC28J60 at startup on these SPI pins -- not an HC6800-ES peripheral, "
+             "see sim/README.md (default if the box is checked with no --enc28j60: P0.3/P0.2/P0.0/P0.1, "
+             "matching the sibling demo repo's 09_ethernet.hex)",
+    )
     return parser.parse_args(argv)
 
 
