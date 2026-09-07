@@ -1,5 +1,5 @@
 /* Board pinout catalog: HC6800-ES V2.0 (Shenzhen Puzhong "51 MCU" teaching
- * board), as wired for stc89c52-demos / stc89c52-staging.
+ * board), as wired for stc89c52-demos and its staging repo.
  * Copyright 2025 Thomas Reidemeister, MIT License (see ../devices/hc573.h)
  *
  * hc6800_es.h
@@ -16,8 +16,8 @@
  *
  * Pin mapping cross-referenced against the board schematic and this
  * project's own already-working SDCC ports (see
- * stc89c52-staging/doc/sdcc-porting-notes.md and
- * stc89c52-staging/doc/simulation-notes.md for how this was derived).
+ * the sibling demo repo's doc/sdcc-porting-notes.md and
+ * the sibling demo repo's doc/simulation-notes.md for how this was derived).
  */
 #ifndef SIM_BOARDS_HC6800_ES_H
 #define SIM_BOARDS_HC6800_ES_H

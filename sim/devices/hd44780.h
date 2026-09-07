@@ -40,7 +40,7 @@
  * data[0..3] as PIN_UNCONNECTED. R-W may also be PIN_UNCONNECTED if the
  * board ties it permanently low (write-only wiring) -- busy-flag reads
  * then simply can't happen, which most of this project's demos never
- * attempt anyway (see doc/simulation-notes.md in stc89c52-staging).
+ * attempt anyway (see the sibling demo repo's doc/simulation-notes.md).
  */
 #ifndef SIM_DEVICES_HD44780_H
 #define SIM_DEVICES_HD44780_H

@@ -189,7 +189,7 @@ static void decode_command(ds1302_t *dev)
         // the firmware ever samples bit 0. Without this, that leftover
         // falling edge gets misread as the first *data* bit's falling
         // edge and bit 0 is skipped entirely (found by tracing a real
-        // read against stc89c52-staging's 3432_clock_digit_tube_2 -- knew
+        // read against the sibling demo repo's 3432_clock_digit_tube_2 -- knew
         // the register held DisplayData correctly since the write-side
         // core bug fix, but the firmware still decoded garbage on read).
         dev->skip_next_falling = 1;

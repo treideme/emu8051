@@ -43,7 +43,7 @@ uint8_t digit_display_get_segments(const digit_display_t *aDev, int aDigit);
 // Best-effort decode of a common-cathode 7-segment byte (bit0=a..bit6=g,
 // bit7=dp, 0 for "segment off") back to '0'-'9'/'A'-'F', or '?' if the
 // pattern doesn't match one of those 16. Matches the segment tables used
-// throughout stc89c52-staging/stc89c52-demos.
+// throughout this simulator's sibling demo repos.
 char digit_display_decode(uint8_t aSegments);
 
 #endif // SIM_DEVICES_DIGIT_DISPLAY_H

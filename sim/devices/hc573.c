@@ -61,7 +61,7 @@ hc573_t *hc573_create(sim_bus_t *aBus, struct em8051 *aCPU, hc573_pins_t aPins)
     // a firmware that never explicitly drives LE (relying on the 8051's
     // power-on port default of 0xFF, i.e. permanently transparent, rather
     // than writing it itself -- confirmed in the wild via
-    // stc89c52-staging's 3432_clock_digit_tube_2, which has no LE
+    // the sibling demo repo's 3432_clock_digit_tube_2, which has no LE
     // assignment anywhere) would otherwise leave transparent stuck at
     // its calloc'd 0 forever, since the only other place it's ever set
     // is on_le_write(), which needs an actual write *event* to fire and

@@ -2,8 +2,8 @@ Please see [here](https://www.reidemeister.com/?p=449) for modifications to the 
 
 For the peripheral-simulation layer (HD44780/DS1302/XPT2046/7-segment
 device models, the Python ctypes bindings, the PySide6 GUI, and the
-`meson test`/`unittest` suite run against stc89c52-staging's compiled
-demos), see [`sim/README.md`](sim/README.md).
+`meson test`/`unittest` suite run against a sibling demo repo's compiled
+projects), see [`sim/README.md`](sim/README.md).
 
 ----
 Original Documentation

@@ -846,7 +846,7 @@ static uint8_t mov_mem_indir_rx(struct em8051 *aCPU)
     // address is the instruction's operand; @Ri is the source. This was
     // backwards (writing to @Ri, reading from the direct operand) --
     // confirmed against real hardware semantics and by tracing a real
-    // SDCC-compiled program (stc89c52-staging's 3432_clock_digit_tube_2):
+    // SDCC-compiled program (the sibling demo repo's 3432_clock_digit_tube_2):
     // `mov (_TIME + 2), @r1` was clobbering _TIME[2] back to the value
     // already at the direct address, instead of copying *into* it from
     // the pointer, breaking any code that copies data via this pattern

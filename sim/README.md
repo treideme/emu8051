@@ -19,17 +19,26 @@ sim/bus.h, bus.c                 <- the "connector": multiplexes struct em8051's
                                      across any number of subscribers
 sim/devices/*.c                  <- peripheral models, written only in terms of
                                      pin_t values handed to them -- never a
-                                     hardcoded port letter
+                                     hardcoded port letter. Board peripherals
+                                     (hd44780, hc573, hc138, digit_display,
+                                     ds1302, xpt2046) AND external/plugin
+                                     peripherals (servo, enc28j60) both live
+                                     here -- see "Board peripherals vs
+                                     external peripheral plugins" below for
+                                     what actually distinguishes them
 sim/boards/hc6800_es.c           <- THIS project's pin_t/xxx_pins_t catalog for
-                                     the one dev-kit this repo targets
+                                     the one dev-kit this repo targets --
+                                     real board peripherals only
 sim/capi.h, capi.c               <- flat C API (opaque handle, plain functions)
                                      that ties board+devices+CPU together for
                                      any external caller
 python/pysim/                    <- ctypes wrapper over capi.h
 python/sim_gui.py                <- PySide6 live view (polls sim_step(), no
                                      callback/threading machinery)
-python/tests/                    <- unittest suite, run against real compiled
-                                     .hex files from stc89c52-staging
+python/tests/                    <- unittest suite: test_hc6800_es.py (board
+                                     peripherals) and test_external_peripherals.py
+                                     (servo/enc28j60), both run against real
+                                     compiled .hex files from a sibling demo repo
 ```
 
 ## Python setup
@@ -41,7 +50,7 @@ use `uv` to get an isolated environment scoped to this directory:
 cd python
 uv venv .venv
 uv pip install -r requirements.txt
-.venv/Scripts/python sim_gui.py ../../stc89c52-staging/build/344_clock_lcd.hex   # or: uv run --no-project python sim_gui.py ...
+.venv/Scripts/python sim_gui.py path/to/some/344_clock_lcd.hex   # or: uv run --no-project python sim_gui.py ...
 .venv/Scripts/python -m unittest discover -s tests -v
 ```
 
@@ -92,9 +101,16 @@ including minute/hour/date/month/year carry and leap years -- a real
 DS1302 does this off its own 32.768kHz crystal, independent of the host
 MCU's clock or whether anyone's watching, so this stays correct whether
 you're fast-forwarding a test or watching it live in real-time mode.
-`sim_gui.py`'s `--lcd`/`--digits`/`--ds1302`/`--adc` flags and
-`--instr-per-tick`/`--interval-ms` pre-set what used to be GUI-only
-options; see `sim_gui.py --help`.
+`sim_gui.py`'s `--lcd`/`--digits`/`--ds1302`/`--adc`/`--servo`/
+`--enc28j60` flags and `--instr-per-tick`/`--interval-ms` pre-set what
+used to be GUI-only options; see `sim_gui.py --help`. The servo panel
+shows a rotating arrow over the current 0-180 degree angle plus the raw
+pulse width; the ENC28J60 panel shows the last decoded SPI opcode, the
+currently-selected register bank, a running buffer-byte count, and an
+activity dot that flashes when that count changes -- both panels gray
+out (same mechanism as the digit/LCD panels) until their checkbox is
+checked, and both need an explicit pin (there's no board default to fall
+back to -- see "Board peripherals vs external peripheral plugins" below).
 
 ## Why a bus/connector layer at all
 
@@ -125,6 +141,13 @@ byte).
    register.
 3. Expose it through `sim/capi.h`/`capi.c` (`sim_enable_foo()` +
    query/stimulus functions) if you want it reachable from Python/the GUI.
+   If it's a real board peripheral, `sim_enable_foo()` takes no pin
+   arguments and reaches into `sim/boards/*`'s catalog, like
+   `sim_enable_lcd()` does. If it's an external plugin with no board
+   wiring to reach for, `sim_enable_foo()` takes the pin(s) as explicit
+   `(port, bit)` arguments instead, like `sim_enable_servo()`/
+   `sim_enable_enc28j60()` do -- see "Board peripherals vs external
+   peripheral plugins" below for which one applies and why.
 
 ## Adding a board
 
@@ -135,6 +158,40 @@ at once). Every existing device model works against it unchanged. Wiring
 a new board into `capi.c`'s `sim_open()` board-name dispatch is the one
 place that currently assumes `hc6800_es` is the only option (flagged
 explicitly in that function).
+
+## Board peripherals vs external peripheral plugins
+
+Two different things live side by side under `sim/devices/`, and the
+difference is purely about *where a pin assignment comes from*, not the
+device model's own code:
+
+- **Board peripherals** (HD44780, 74HC573/74HC138, DS1302, XPT2046) are
+  wired to specific pins on a *real* HC6800-ES board. Their pins live as
+  named constants in `sim/boards/hc6800_es.c`, and `capi.c`'s
+  `sim_enable_lcd()`/`sim_enable_ds1302()`/etc take no pin arguments at
+  all -- they just reach into that one board's catalog, because on this
+  board there's only one legitimate answer to "which pins is the LCD on".
+- **External peripheral plugins** (the servo, the ENC28J60) are *not* on
+  the real board at all -- there's no servo header and no Ethernet module
+  on an HC6800-ES. A project that wants one has to invent a wiring
+  assumption for it (see the sibling demo repo's `05_enc_servo/enc.c` and
+  `09_ethernet/enc28j60_cfg.h` for what each one actually picked, and
+  why). Because that pin choice is a per-project invention rather than a
+  board fact, it does not belong in `sim/boards/hc6800_es.c` -- baking a
+  made-up pin into the board catalog would make it look like a real
+  HC6800-ES fact to the next reader. Instead, `capi.c`'s
+  `sim_enable_servo()`/`sim_enable_enc28j60()` take the pin(s) as
+  explicit `(port, bit)` arguments (`sim_gui.py --servo`/`--enc28j60`
+  mirror this), and the *caller* -- a project's own test, or whoever
+  points the GUI at that project's `.hex` -- is the one who knows what
+  pin that particular project assumed.
+
+The device models themselves don't know or care which category they're
+in -- both kinds are written purely in terms of `pin_t` (see "Adding a
+peripheral" below), which is exactly what makes an external plugin
+possible to reuse across unrelated projects that each pick their own pin
+for it, the same way a board peripheral is reusable across boards that
+each wire it to their own pin.
 
 ## Fidelity notes and the real bugs found building this
 
@@ -149,6 +206,20 @@ explicitly in that function).
 - 74HC573/74HC138: generic, reusable single-chip primitives; composed by
   `digit_display.*` for the common "latch + decoder + 7-segment bank"
   topology this board (and most similar teaching boards) use.
+- Servo (external plugin): measures a PWM input pin's high-time and maps
+  it to a 0-180 degree angle over a settable pulse-width range (1000-
+  2000us for a standard hobby servo). No mechanical model -- it reports
+  the angle a real servo would be *commanded* to, not simulated inertia
+  or torque.
+- ENC28J60 (external plugin): a register/bank/buffer *protocol* model --
+  the bit-banged SPI mode-0 shift register, the 4-bank x 32-slot control-
+  register file (with the five all-bank registers shared across banks,
+  matching the real chip), READ_BUF_MEM/WRITE_BUF_MEM against an 8KB
+  buffer with ERDPT/EWRPT auto-increment, SOFT_RESET, and the RCR
+  dummy-byte quirk for MAC/MII registers. Deliberately **not** a network
+  stack: no packet TX/RX, no PHY link, no electrical timing -- it exists
+  to prove a driver's opcode framing and bank-select sequencing are
+  correct, nothing past that.
 - None of this models a peripheral chip's *electrical* behavior --
   there's no ADC reference voltage, no RTC crystal drift/inaccuracy
   (DS1302's clock advances at exactly `clock_hz/12` real seconds per
@@ -156,7 +227,7 @@ explicitly in that function).
   It models the *protocol/register* behavior precisely enough that a
   firmware bug and a simulator bug are actually distinguishable, which is
   the property that mattered for finding these, all confirmed by tracing
-  real compiled output from stc89c52-staging's demos against a
+  real compiled output from the sibling demo repo's projects against a
   known-correct protocol/ISA reference rather than assumed:
   - **`mov_mem_indir_rx` in `../opcodes.c`** (opcode 0x86/0x87, `MOV
     direct,@Ri`) had source and destination completely swapped -- a
@@ -182,3 +253,34 @@ explicitly in that function).
     at device-creation time instead of assuming it; covered by
     `python/tests/test_hc6800_es.py`'s
     `test_digits_survive_boot_without_stale_latch`.
+  - **`sim/devices/enc28j60.c`'s READ_BUF_MEM handling** over-counted by
+    one byte on every read: the output byte for a READ_BUF_MEM data byte
+    has to be staged *before* it starts shifting out (so it's ready in
+    time), but the natural place to prepare the *next* byte's output --
+    immediately after the current one finishes -- also advanced the
+    buffer pointer for a byte that may never actually get clocked out if
+    CS deasserts right after. A real 4-byte read+write round trip
+    (the sibling demo repo's `09_ethernet_diag.hex`) read
+    `buffer_byte_count()` as 9, not the correct 8. Fixed by splitting the
+    read side into a peek (compute the next output byte, no side effect)
+    and a commit (advance the pointer, only once a byte has actually
+    finished shifting out) -- see `enc28j60.c`'s own comment on
+    `peek_read_byte()`/`commit_read_byte()`; covered by
+    `python/tests/test_external_peripherals.py`'s
+    `test_buffer_round_trip_advances_pointers_by_exactly_one_per_byte`.
+
+## Known limitation: UART only ever fires off Timer1
+
+`core.c`'s `timer_tick()` only calls `serial_tx()` when Timer1 overflows
+(`TCONMASK_TF1`) with `SCON.SM1` set -- there's no equivalent path for
+Timer2 as the baud-rate source, even though `#ifdef __8052__` blocks exist
+elsewhere in `core.c` for other Timer2 behavior (all still `// TODO`, and
+`__8052__` isn't defined anywhere in this project's build regardless).
+Real STC89C52/8052 parts can source UART baud from either timer.
+the sibling demo repo's `09_ethernet/ethernet.c` configures Timer2 (real
+hardware behavior, ported as-is) and never touches Timer1, so its
+`PUTS()` calls block forever in this simulator waiting for `TI` -- not a
+bug in that driver, a gap in this core's Timer2 model. That's why
+`09_ethernet_diag.hex` (a UART-free variant of the same real
+`enc28j60.c` driver) is what the tests and `sim_gui.py`'s ENC28J60 panel
+actually exercise; see `09_ethernet/diag_no_uart.c`'s own comment.

@@ -1,8 +1,8 @@
 """unittest coverage for the sim/ peripheral layer, run against real
-compiled .hex files from the sibling stc89c52-staging repo.
+compiled .hex files from the sibling demo repo.
 
 These need that repo built first (`meson setup build && ninja -C build`
-inside stc89c52-staging) -- tests for a .hex that isn't there are skipped
+inside the sibling demo repo) -- tests for a .hex that isn't there are skipped
 rather than failed, so this suite still runs (mostly-skipped) in isolation.
 
 Run with: python -m unittest discover -s python/tests -v
@@ -27,7 +27,7 @@ def skip_unless_built(name):
     path = hexpath(name)
     return unittest.skipUnless(
         os.path.isfile(path),
-        f"{name} not found -- build stc89c52-staging first (meson setup build && ninja -C build)",
+        f"{name} not found -- build the sibling demo repo first (meson setup build && ninja -C build)",
     )
 
 
@@ -75,7 +75,7 @@ class DigitDisplayTests(unittest.TestCase):
             sim.enable_digit_display(8)
             sim.step_instructions(500_000)
             # The seconds *value* changes too slowly to reach in a bounded
-            # instruction budget (see stc89c52-staging/doc/simulation-notes.md
+            # instruction budget (see the sibling demo repo's doc/simulation-notes.md
             # for why ucsim hit the same wall) -- what's cheap and
             # meaningful to assert is that the multiplex scan is alive at
             # all: more than one digit position actually got written.
@@ -127,7 +127,7 @@ class RealTimeClockTests(unittest.TestCase):
     """DS1302 keeps its own free-running clock now (ds1302_step(), tied to
     simulated elapsed time via clock_hz/12 ticks-per-second -- see
     sim/devices/ds1302.c), independent of any particular firmware, so
-    these don't need a stc89c52-staging checkout at all."""
+    these don't need the sibling demo repo's checkout at all."""
 
     def test_seconds_register_increments_exactly_on_the_boundary(self):
         with Simulator("hc6800_es") as sim:
