@@ -16,8 +16,8 @@
  *
  * Pin mapping cross-referenced against the board schematic and this
  * project's own already-working SDCC ports (see
- * demo-projects/doc/sdcc-porting-notes.md and
- * demo-projects/doc/simulation-notes.md for how this was derived).
+ * the sibling demo repo's doc/sdcc-porting-notes.md and
+ * the sibling demo repo's doc/simulation-notes.md for how this was derived).
  */
 #ifndef SIM_BOARDS_HC6800_ES_H
 #define SIM_BOARDS_HC6800_ES_H
