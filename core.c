@@ -28,15 +28,35 @@
 
 #define T0_MODE3_MASK (TMODMASK_M0_0 | TMODMASK_M1_0)
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "emu8051.h"
 
+static void serial_tx(struct em8051 *aCPU) {
+	// Test if still something to send
+	if (! aCPU->serial_out_remaining_bits)
+	       return;
+
+	aCPU->serial_out_remaining_bits--;
+	bool tx_bit = (aCPU->mSFR[REG_SBUF] >> aCPU->serial_out_remaining_bits);
+	// Set P3.1 according to the currently clocked out SERIAL bit
+	aCPU->mSFR[REG_P3] &= ~(1 << 1);
+	if (tx_bit) aCPU->mSFR[REG_P3] |= (1 << 1);
+
+	// If everything is sent now, add it to the visual buffer & raise interrupt
+	if (aCPU->serial_out_remaining_bits == 0) {
+		aCPU->serial_out[aCPU->serial_out_idx] = aCPU->mSFR[REG_SBUF];
+		aCPU->serial_out_idx = (aCPU->serial_out_idx + 1) % sizeof(aCPU->serial_out);
+		aCPU->mSFR[REG_SCON] |= (1<<1); // Set TI bit
+		if (aCPU->mSFR[REG_IE] & IEMASK_ES) aCPU->serial_interrupt_trigger = 1; // Trigger Serial Interrupt
+	}
+}
+
+
 static void timer_tick(struct em8051 *aCPU)
 {
-    int increment;
-    int v;
+    uint8_t increment;
+    uint16_t v;
 
     // TODO: External int 0 flag
 
@@ -272,6 +292,14 @@ static void timer_tick(struct em8051 *aCPU)
             default: // disabled
                 break;
             }
+
+	    // If Timer1 overflowed, see if we need to send a serial bit
+            if (aCPU->mSFR[REG_TCON] & TCONMASK_TF1) {
+                if (aCPU->mSFR[REG_SCON] & SCONMASK_SM1) {
+                    serial_tx(aCPU);
+		    aCPU->mSFR[REG_TCON] &= ~TCONMASK_TF1; // clear overflow flag
+                }
+            }
         }
     }
 
@@ -280,9 +308,9 @@ static void timer_tick(struct em8051 *aCPU)
 
 void handle_interrupts(struct em8051 *aCPU)
 {
-    int dest_ip = -1;
-    int hi = 0;
-    int lo = 0;
+    int16_t dest_ip = -1;
+    uint8_t hi = 0;
+    uint8_t lo = 0;
 
     // can't interrupt high level
     if (aCPU->mInterruptActive > 1) 
@@ -294,7 +322,7 @@ void handle_interrupts(struct em8051 *aCPU)
         if (aCPU->mSFR[REG_IE] & IEMASK_EX0 && aCPU->mSFR[REG_TCON] & TCONMASK_IE0)
         {
             // External int 0 
-            dest_ip = 0x3;
+            dest_ip = ISR_INT0;
             if (aCPU->mSFR[REG_IP] & IPMASK_PX0)
                 hi = 1;
             lo = 1;
@@ -304,13 +332,13 @@ void handle_interrupts(struct em8051 *aCPU)
             // Timer/counter 0 
             if (!lo)
             {
-                dest_ip = 0xb;
+                dest_ip = ISR_TF0;
                 lo = 1;
             }
             if (aCPU->mSFR[REG_IP] & IPMASK_PT0)
             {
                 hi = 1;
-                dest_ip = 0xb;
+                dest_ip = ISR_TF0;
             }
         }
         if (aCPU->mSFR[REG_IE] & IEMASK_EX1 && aCPU->mSFR[REG_TCON] & TCONMASK_IE1 && !hi)
@@ -318,13 +346,13 @@ void handle_interrupts(struct em8051 *aCPU)
             // External int 1 
             if (!lo)
             {
-                dest_ip = 0x13;
+                dest_ip = ISR_INT1;
                 lo = 1;
             }
             if (aCPU->mSFR[REG_IP] & IPMASK_PX1)
             {
                 hi = 1;
-                dest_ip = 0x13;
+                dest_ip = ISR_INT1;
             }
         }
         if (aCPU->mSFR[REG_IE] & IEMASK_ET1 && aCPU->mSFR[REG_TCON] & TCONMASK_TF1 && !hi)
@@ -332,45 +360,47 @@ void handle_interrupts(struct em8051 *aCPU)
             // Timer/counter 1 enabled
             if (!lo)
             {
-                dest_ip = 0x1b;
+                dest_ip = ISR_TF1;
                 lo = 1;
             }
             if (aCPU->mSFR[REG_IP] & IPMASK_PT1)
             {
                 hi = 1;
-                dest_ip = 0x1b;
+                dest_ip = ISR_TF1;
             }
         }
-        if (aCPU->mSFR[REG_IE] & IEMASK_ES && !hi)
+        if (aCPU->mSFR[REG_IE] & IEMASK_ES && aCPU->serial_interrupt_trigger && !hi)
         {
             // Serial port interrupt 
             if (!lo)
             {
-                dest_ip = 0x23;
+                dest_ip = ISR_SR;
                 lo = 1;
             }
             if (aCPU->mSFR[REG_IP] & IPMASK_PS)
             {
                 hi = 1;
-                dest_ip = 0x23;
+                dest_ip = ISR_SR;
             }
             // TODO
         }
+#ifdef __8052__
         if (aCPU->mSFR[REG_IE] & IEMASK_ET2 && !hi)
         {
             // Timer 2 (8052 only)
             if (!lo)
             {
-                dest_ip = 0x2b; // guessed
+                dest_ip = ISR_SR;
                 lo = 1;
             }
             if (aCPU->mSFR[REG_IP] & IPMASK_PT2)
             {
                 hi = 1;
-                dest_ip = 0x2b; // guessed
+                dest_ip = ISR_SR;
             }
             // TODO
         }
+#endif // __8052__
     }
     
     // no interrupt
@@ -382,6 +412,7 @@ void handle_interrupts(struct em8051 *aCPU)
         return; 
 
     // some interrupt occurs; perform LCALL
+    aCPU->mSFR[REG_PCON] &= ~0x01; // clear idle flag, but not Power down flag
     push_to_stack(aCPU, aCPU->mPC & 0xff);
     push_to_stack(aCPU, aCPU->mPC >> 8);
     aCPU->mPC = dest_ip;
@@ -390,11 +421,14 @@ void handle_interrupts(struct em8051 *aCPU)
     aCPU->mTickDelay = 2;
     switch (dest_ip)
     {
-    case 0xb:
+    case ISR_TF0:
         aCPU->mSFR[REG_TCON] &= ~TCONMASK_TF0; // clear overflow flag
         break;
-    case 0x1b:
+    case ISR_TF1:
         aCPU->mSFR[REG_TCON] &= ~TCONMASK_TF1; // clear overflow flag
+        break;
+    case ISR_SR:
+        aCPU->serial_interrupt_trigger = 0; // handled the serial interrupt trigger
         break;
     }
 
@@ -411,14 +445,20 @@ void handle_interrupts(struct em8051 *aCPU)
     aCPU->int_sp[hi] = aCPU->mSFR[REG_SP];
 }
 
-int tick(struct em8051 *aCPU)
+bool tick(struct em8051 *aCPU)
 {
-    int v;
-    int ticked = 0;
+    uint8_t v;
+    bool ticked = false;
 
     if (aCPU->mTickDelay)
     {
         aCPU->mTickDelay--;
+    }
+
+    // Test for Power Down
+    if (aCPU->mTickDelay == 0 && (aCPU->mSFR[REG_PCON]) & 0x02) {
+        aCPU->mTickDelay = 1;
+        return 1;
     }
 
     // Interrupts are sent if the following cases are not true:
@@ -432,8 +472,14 @@ int tick(struct em8051 *aCPU)
 
     if (aCPU->mTickDelay == 0)
     {
-        aCPU->mTickDelay = aCPU->op[aCPU->mCodeMem[aCPU->mPC & (aCPU->mCodeMemSize - 1)]](aCPU);
-        ticked = 1;
+        // IDL activate the idle mode to save power
+        bool is_idle = (aCPU->mSFR[REG_PCON]) & 0x01;
+        if (is_idle) {
+            aCPU->mTickDelay = 1;
+        } else {
+            aCPU->mTickDelay = aCPU->op[aCPU->mCodeMem[aCPU->mPC & (aCPU->mCodeMemMaxIdx)]](aCPU);
+        }
+        ticked = true;
         // update parity bit
         v = aCPU->mSFR[REG_ACC];
         v ^= v >> 4;
@@ -447,21 +493,31 @@ int tick(struct em8051 *aCPU)
     return ticked;
 }
 
-int decode(struct em8051 *aCPU, int aPosition, unsigned char *aBuffer)
+uint8_t decode(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    return aCPU->dec[aCPU->mCodeMem[aPosition & (aCPU->mCodeMemSize - 1)]](aCPU, aPosition, aBuffer);
+    bool is_idle = (aCPU->mSFR[REG_PCON]) & 0x01;
+    if (is_idle) {
+        strcpy(aBuffer, "IDLE");
+        return 0;
+    }
+    bool is_powerdown = (aCPU->mSFR[REG_PCON]) & 0x02;
+    if (is_powerdown) {
+        strcpy(aBuffer, "POWER DOWN");
+        return 0;
+    }
+    return aCPU->dec[aCPU->mCodeMem[aPosition & (aCPU->mCodeMemMaxIdx)]](aCPU, aPosition, aBuffer);
 }
 
 void disasm_setptrs(struct em8051 *aCPU);
 void op_setptrs(struct em8051 *aCPU);
 
-void reset(struct em8051 *aCPU, int aWipe)
+void reset(struct em8051 *aCPU, bool aWipe)
 {
     // clear memory, set registers to bootup values, etc    
     if (aWipe)
     {
-        memset(aCPU->mCodeMem, 0, aCPU->mCodeMemSize);
-        memset(aCPU->mExtData, 0, aCPU->mExtDataSize);
+        memset(aCPU->mCodeMem, 0, aCPU->mCodeMemMaxIdx+1);
+        memset(aCPU->mExtData, 0, aCPU->mExtDataMaxIdx+1);
         memset(aCPU->mLowerData, 0, 128);
         if (aCPU->mUpperData) 
             memset(aCPU->mUpperData, 0, 128);
@@ -477,6 +533,16 @@ void reset(struct em8051 *aCPU, int aWipe)
     aCPU->mSFR[REG_P2] = 0xff;
     aCPU->mSFR[REG_P3] = 0xff;
 
+    // Power-off flag will be 1 only after a power on (cold reset).
+    // A warm reset doesn’t affect the value of this bit
+    // ... Therefore, we only set it if aWipe is 1
+    if (aWipe)
+        aCPU->mSFR[REG_PCON] |= (1<<4);
+
+    // Random values
+    if (aWipe)
+        aCPU->mSFR[REG_SBUF] = rand();
+
     // build function pointer lists
 
     disasm_setptrs(aCPU);
@@ -484,60 +550,8 @@ void reset(struct em8051 *aCPU, int aWipe)
 
     // Clean internal variables
     aCPU->mInterruptActive = 0;
-}
 
-
-int readbyte(FILE * f)
-{
-    char data[3];
-    data[0] = fgetc(f);
-    data[1] = fgetc(f);
-    data[2] = 0;
-    return strtol(data, NULL, 16);
-}
-
-int load_obj(struct em8051 *aCPU, char *aFilename)
-{
-    FILE *f;    
-    if (aFilename == 0 || aFilename[0] == 0)
-        return -1;
-    f = fopen(aFilename, "r");
-    if (!f) return -1;
-    if (fgetc(f) != ':')
-    {
-    	  fclose(f);
-        return -2; // unsupported file format
-    }
-    while (!feof(f))
-    {
-        int recordlength;
-        int address;
-        int recordtype;
-        int checksum;
-        int i;
-        recordlength = readbyte(f);
-        address = readbyte(f);
-        address <<= 8;
-        address |= readbyte(f);
-        recordtype = readbyte(f);
-        if (recordtype == 1)
-            return 0; // we're done
-        if (recordtype != 0)
-            return -3; // unsupported record type
-        checksum = recordtype + recordlength + (address & 0xff) + (address >> 8); // final checksum = 1 + not(checksum)
-        for (i = 0; i < recordlength; i++)
-        {
-            int data = readbyte(f);
-            checksum += data;
-            aCPU->mCodeMem[address + i] = data;
-        }
-        i = readbyte(f);
-        checksum &= 0xff;
-        checksum = 256 - checksum;
-        if (i != (checksum & 0xff))
-            return -4; // checksum failure
-        while (fgetc(f) != ':' && !feof(f)) {} // skip newline        
-    }
-	  fclose(f);
-    return -5;
+    // Clean Serial
+    aCPU->serial_interrupt_trigger = 0;
+    aCPU->serial_out_remaining_bits = 0;
 }

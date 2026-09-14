@@ -67,10 +67,7 @@ unsigned int clocks = 0;
 int view = MAIN_VIEW;
 
 // old port out values
-int p0out = 0;
-int p1out = 0;
-int p2out = 0;
-int p3out = 0;
+int pout[4] = { 0 };
 
 int breakpoint = -1;
 
@@ -95,9 +92,9 @@ void emu_sleep(int value)
 #endif
 }
 
-void setSpeed(int speed, int runmode)
+void setSpeed(int aSpeed, int aRunmode)
 {
-    switch (speed)
+    switch (aSpeed)
     {
     case 7:
         slk_set(5, "+/-|.5Hz", 0);
@@ -125,7 +122,7 @@ void setSpeed(int speed, int runmode)
         break;
     }
 
-    if (runmode == 0)
+    if (aRunmode == 0)
     {
         slk_set(4, "r)un", 0);
         slk_refresh();
@@ -140,7 +137,7 @@ void setSpeed(int speed, int runmode)
         slk_refresh();
     }
 
-    if (speed < 4)
+    if (aSpeed < 4)
     {
         nocbreak();
         cbreak();
@@ -148,7 +145,7 @@ void setSpeed(int speed, int runmode)
     }
     else
     {
-        switch(speed)
+        switch(aSpeed)
         {
         case 7:
             halfdelay(20);
@@ -167,9 +164,12 @@ void setSpeed(int speed, int runmode)
 }
 
 
+void emu_sfrwrite_SBUF(struct em8051 *aCPU, uint8_t aRegister)
+{
+    aCPU->serial_out_remaining_bits = 8;
+}
 
-
-int emu_sfrread(struct em8051 *aCPU, int aRegister)
+uint8_t emu_sfrread(struct em8051 *aCPU, uint8_t aRegister)
 {
     int outputbyte = -1;
 
@@ -177,38 +177,38 @@ int emu_sfrread(struct em8051 *aCPU, int aRegister)
     {
         if (aRegister == REG_P0 + 0x80)
         {
-            outputbyte = p0out;
+            outputbyte = pout[0];
         }
         if (aRegister == REG_P1 + 0x80)
         {
-            outputbyte =  p1out;
+            outputbyte = pout[1];
         }
         if (aRegister == REG_P2 + 0x80)
         {
-            outputbyte =  p2out;
+            outputbyte = pout[2];
         }
         if (aRegister == REG_P3 + 0x80)
         {
-            outputbyte =  p3out;
+            outputbyte = pout[3];
         }
     }
     else
     {
         if (aRegister == REG_P0 + 0x80)
         {
-            outputbyte = p0out = emu_readvalue(aCPU, "P0 port read", p0out, 2);
+            outputbyte = pout[0] = emu_readvalue(aCPU, "P0 port read", pout[0], 2);
         }
         if (aRegister == REG_P1 + 0x80)
         {
-            outputbyte = p1out = emu_readvalue(aCPU, "P1 port read", p1out, 2);
+            outputbyte = pout[1] = emu_readvalue(aCPU, "P1 port read", pout[1], 2);
         }
         if (aRegister == REG_P2 + 0x80)
         {
-            outputbyte = p2out = emu_readvalue(aCPU, "P2 port read", p2out, 2);
+            outputbyte = pout[2] = emu_readvalue(aCPU, "P2 port read", pout[2], 2);
         }
         if (aRegister == REG_P3 + 0x80)
         {
-            outputbyte = p3out = emu_readvalue(aCPU, "P3 port read", p3out, 2);
+            outputbyte = pout[3] = emu_readvalue(aCPU, "P3 port read", pout[3], 2);
         }
     }
     if (outputbyte != -1)
@@ -225,7 +225,7 @@ int emu_sfrread(struct em8051 *aCPU, int aRegister)
         }
         // option: dump random values for output bits with
         // output latches set to 0
-        return outputbyte & aCPU->mSFR[aRegister - 0x80] |
+        return (outputbyte & aCPU->mSFR[aRegister - 0x80]) |
             (rand() & ~aCPU->mSFR[aRegister - 0x80]);
     }
     return aCPU->mSFR[aRegister - 0x80];
@@ -280,17 +280,22 @@ int main(int parc, char ** pars)
     int ticked = 1;
 
     memset(&emu, 0, sizeof(emu));
-    emu.mCodeMem     = malloc(65536);
-    emu.mCodeMemSize = 65536;
-    emu.mExtData     = malloc(65536);
-    emu.mExtDataSize = 65536;
-    emu.mLowerData   = malloc(128);
-    emu.mUpperData   = malloc(128);
-    emu.mSFR         = malloc(128);
+    emu.mCodeMemMaxIdx = 65536-1;
+    emu.mCodeMem     = calloc(emu.mCodeMemMaxIdx+1, sizeof(unsigned char));
+    emu.mExtDataMaxIdx = 65536-1;
+    emu.mExtData     = calloc(emu.mExtDataMaxIdx+1, sizeof(unsigned char));
+    emu.mUpperData   = calloc(128, sizeof(unsigned char));
     emu.except       = &emu_exception;
-    emu.sfrread      = &emu_sfrread;
     emu.xread = NULL;
     emu.xwrite = NULL;
+
+    emu.sfrwrite[REG_SBUF] = emu_sfrwrite_SBUF;
+
+    emu.sfrread[REG_P0] = emu_sfrread;
+    emu.sfrread[REG_P1] = emu_sfrread;
+    emu.sfrread[REG_P2] = emu_sfrread;
+    emu.sfrread[REG_P3] = emu_sfrread;
+
     reset(&emu, 1);
 
     if (parc > 1)
@@ -534,6 +539,14 @@ int main(int parc, char ** pars)
                 ticked = 1;
             }
             break;
+        case 'z':
+	    // Equivalent of "R)eset (init regs, set PC to zero)"
+	    reset(&emu, 0);
+	    break;
+        case 'Z':
+	    // Equivalent of "W)ipe (init regs, set PC to zero, clear memory)"
+	    reset(&emu, 1);
+	    break;
         case KEY_END:
             clocks = 0;
             ticked = 1;
@@ -642,4 +655,59 @@ int main(int parc, char ** pars)
     endwin();
 
     return EXIT_SUCCESS;
+}
+
+int readbyte(FILE * f)
+{
+    char data[3];
+    data[0] = fgetc(f);
+    data[1] = fgetc(f);
+    data[2] = 0;
+    return strtol(data, NULL, 16);
+}
+
+int load_obj(struct em8051 *aCPU, char *aFilename)
+{
+    FILE *f;
+    if (aFilename == 0 || aFilename[0] == 0)
+        return -1;
+    f = fopen(aFilename, "r");
+    if (!f) return -1;
+    if (fgetc(f) != ':')
+    {
+	  fclose(f);
+        return -2; // unsupported file format
+    }
+    while (!feof(f))
+    {
+        int recordlength;
+        int address;
+        int recordtype;
+        int checksum;
+        int i;
+        recordlength = readbyte(f);
+        address = readbyte(f);
+        address <<= 8;
+        address |= readbyte(f);
+        recordtype = readbyte(f);
+        if (recordtype == 1)
+            return 0; // we're done
+        if (recordtype != 0)
+            return -3; // unsupported record type
+        checksum = recordtype + recordlength + (address & 0xff) + (address >> 8); // final checksum = 1 + not(checksum)
+        for (i = 0; i < recordlength; i++)
+        {
+            int data = readbyte(f);
+            checksum += data;
+            aCPU->mCodeMem[address + i] = data;
+        }
+        i = readbyte(f);
+        checksum &= 0xff;
+        checksum = 256 - checksum;
+        if (i != (checksum & 0xff))
+            return -4; // checksum failure
+        while (fgetc(f) != ':' && !feof(f)) {} // skip newline
+    }
+	  fclose(f);
+    return -5;
 }

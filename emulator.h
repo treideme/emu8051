@@ -60,31 +60,28 @@ extern int speed;
 extern int view;
 
 // old port out values
-extern int p0out;
-extern int p1out;
-extern int p2out;
-extern int p3out;
+extern int pout[];
 
 // current clock count
-unsigned int clocks;
+extern unsigned int clocks;
 
-int opt_exception_iret_sp;
-int opt_exception_iret_acc;
-int opt_exception_iret_psw;
-int opt_exception_acc_to_a;
-int opt_exception_stack;
-int opt_exception_invalid;
-int opt_clock_select;
-int opt_clock_hz;
-int opt_step_instruction;
-int opt_input_outputlow;
+extern int opt_exception_iret_sp;
+extern int opt_exception_iret_acc;
+extern int opt_exception_iret_psw;
+extern int opt_exception_acc_to_a;
+extern int opt_exception_stack;
+extern int opt_exception_invalid;
+extern int opt_clock_select;
+extern int opt_clock_hz;
+extern int opt_step_instruction;
+extern int opt_input_outputlow;
 
 
 
 // emu.c
 extern int getTick();
 extern void setSpeed(int speed, int runmode);
-extern int emu_sfrread(struct em8051 *aCPU, int aRegister);
+//extern uint8_t emu_sfrread(struct em8051 *aCPU, uint8_t aRegister);
 extern void refreshview(struct em8051 *aCPU);
 extern void change_view(struct em8051 *aCPU, int changeto);
 

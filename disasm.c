@@ -34,6 +34,12 @@
 #include <string.h>
 #include "emu8051.h"
 
+#define CODEMEM(x) aCPU->mCodeMem[(x)&(aCPU->mCodeMemMaxIdx)]
+#define OPCODE CODEMEM(aPosition + 0)
+#define OPERAND1 CODEMEM(aPosition + 1)
+#define OPERAND2 CODEMEM(aPosition + 2)
+
+
 //#define static
 
 void mem_memonic(int aValue, char *aBuffer)
@@ -122,6 +128,10 @@ void mem_memonic(int aValue, char *aBuffer)
             break;
         case REG_PCON:
             strcpy(aBuffer, "PCON");
+            done = 1;
+            break;
+        case REG_SBUF:
+            strcpy(aBuffer, "SBUF");
             done = 1;
             break;
         }
@@ -214,588 +224,588 @@ void bitaddr_memonic(int aValue, char *aBuffer)
 }
 
 
-static int disasm_ajmp_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_ajmp_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"AJMP  #%04Xh",
-        (aPosition + 2) & 0xf800 |
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)] | 
-        ((aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)] & 0xe0) << 3));
+        ((aPosition + 2) & 0xf800) |
+        OPERAND1 |
+        ((OPCODE & 0xe0) << 3));
     return 2;
 }
 
-static int disasm_ljmp_address(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_ljmp_address(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"LJMP  #%04Xh",        
-        (aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)] << 8) | 
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        (OPERAND1 << 8) |
+        OPERAND2);
     return 3;
 }
 
-static int disasm_rr_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_rr_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"RR    A");
     return 1;
 }
 
-static int disasm_inc_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_inc_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"INC   A");
     return 1;
 }
 
-static int disasm_inc_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_inc_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"INC   %s",        
         mem);
     
     return 2;
 }
 
-static int disasm_inc_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_inc_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"INC   @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)] & 1);
+        OPCODE & 1);
     return 1;
 }
 
-static int disasm_jbc_bitaddr_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jbc_bitaddr_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"JBC   %s, #%+d",        
         baddr,
-        (signed char)aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND2);
     return 3;
 }
 
-static int disasm_acall_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_acall_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ACALL %04Xh",
-        (aPosition + 2) & 0xf800 |
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)] | 
-        ((aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)] & 0xe0) << 3));
+        ((aPosition + 2) & 0xf800) |
+        OPERAND1 |
+        ((OPCODE & 0xe0) << 3));
     return 2;
 }
 
-static int disasm_lcall_address(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_lcall_address(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"LCALL #%04Xh",        
-        (aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)] << 8) | 
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        (OPERAND1 << 8) |
+        OPERAND2);
     return 3;
 }
 
-static int disasm_rrc_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_rrc_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"RRC   A");
     return 1;
 }
 
-static int disasm_dec_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_dec_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"DEC   A");
     return 1;
 }
 
-static int disasm_dec_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_dec_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"DEC   %s",        
         mem);
     
     return 2;
 }
 
-static int disasm_dec_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_dec_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"DEC   @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)] & 1);
+        OPCODE & 1);
     return 1;
 }
 
 
-static int disasm_jb_bitaddr_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jb_bitaddr_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"JB   %s, #%+d",        
         baddr,
-        (signed char)aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND2);
     return 3;
 }
 
-static int disasm_ret(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_ret(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"RET");
     return 1;
 }
 
-static int disasm_rl_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_rl_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"RL    A");
     return 1;
 }
 
-static int disasm_add_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_add_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ADD   A, #%02Xh",        
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_add_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_add_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ADD   A, %s",        
         mem);
     
     return 2;
 }
 
-static int disasm_add_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_add_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ADD   A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
-static int disasm_jnb_bitaddr_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jnb_bitaddr_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"JNB   %s, #%+d",        
         baddr,
-        (signed char)aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND2);
     return 3;
 }
 
-static int disasm_reti(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_reti(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"RETI");
     return 1;
 }
 
-static int disasm_rlc_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_rlc_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"RLC   A");
     return 1;
 }
 
-static int disasm_addc_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_addc_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ADDC  A, #%02Xh",        
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_addc_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_addc_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ADDC  A, %s",        
         mem);
     
     return 2;
 }
 
-static int disasm_addc_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_addc_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ADDC  A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_jc_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jc_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"JC    #%+d",        
-        (signed char)aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND1);
     return 2;
 }
 
-static int disasm_orl_mem_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_mem_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ORL   %s, A",        
         mem);
     
     return 2;
 }
 
-static int disasm_orl_mem_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_mem_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ORL   %s, #%02Xh",        
         mem,
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        OPERAND2);
     
     return 3;
 }
 
-static int disasm_orl_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ORL   A, #%02Xh",        
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_orl_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ORL   A, %s",        
         mem);
     
     return 2;
 }
 
-static int disasm_orl_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ORL   A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_jnc_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jnc_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"JNC   #%+d",        
-        (signed char)aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND1);
     return 2;
 }
 
-static int disasm_anl_mem_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_mem_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ANL   %s, A",
         mem);
     
     return 2;
 }
 
-static int disasm_anl_mem_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_mem_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ANL   %s, #%02Xh",        
         mem,
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        OPERAND2);
     
     return 3;
 }
 
-static int disasm_anl_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ANL   A, #%02Xh",
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_anl_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"ANL   A, %s",
         mem);
     
     return 2;
 }
 
-static int disasm_anl_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"ANL   A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_jz_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jz_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"JZ    #%+d",        
-        (signed char)aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND1);
     return 2;
 }
 
-static int disasm_xrl_mem_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xrl_mem_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"XRL   %s, A",
         mem);
     
     return 2;
 }
 
-static int disasm_xrl_mem_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xrl_mem_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"XRL   %s, #%02Xh",        
         mem,
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        OPERAND2);
     
     return 3;
 }
 
-static int disasm_xrl_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xrl_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"XRL   A, #%02Xh",
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_xrl_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xrl_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"XRL   A, %s",
         mem);
     
     return 2;
 }
 
-static int disasm_xrl_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xrl_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"XRL   A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_jnz_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jnz_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"JNZ   #%+d",        
-        (signed char)aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        (signed char)OPERAND1);
     return 2;
 }
 
-static int disasm_orl_c_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_c_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"ORL   C, %s",
         baddr);
     return 2;
 }
 
-static int disasm_jmp_indir_a_dptr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_jmp_indir_a_dptr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"JMP   @A+DPTR");
     return 1;
 }
 
-static int disasm_mov_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOV   A, #%02Xh",
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_mov_mem_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_mem_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   %s, #%02Xh",        
         mem,
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        OPERAND2);
     
     return 3;
 }
 
-static int disasm_mov_indir_rx_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_indir_rx_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOV   @R%d, #%02Xh",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1,
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPCODE&1,
+        OPERAND1);
     return 2;
 }
 
 
-static int disasm_sjmp_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_sjmp_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"SJMP  #%+d",        
-        (signed char)(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]));
+        (signed char)(OPERAND1));
     return 2;
 }
 
-static int disasm_anl_c_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_c_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"ANL   C, %s",
         baddr);
     return 2;
 }
 
-static int disasm_movc_a_indir_a_pc(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_movc_a_indir_a_pc(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOVC  A, @A+PC");
     return 1;
 }
 
-static int disasm_div_ab(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_div_ab(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"DIV   AB");
     return 1;
 }
 
-static int disasm_mov_mem_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_mem_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char mem1[16];
     char mem2[16];
-    mem_memonic(aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)], mem1);
-    mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem2);
+    mem_memonic(OPERAND2, mem1);
+    mem_memonic(OPERAND1, mem2);
     sprintf(aBuffer,"MOV   %s, %s",        
         mem1,
         mem2);
     return 3;
 }
 
-static int disasm_mov_mem_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_mem_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   %s, @R%d",        
         mem,
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     
     return 2;
 }
 
 
-static int disasm_mov_dptr_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_dptr_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOV   DPTR, #0%02X%02Xh",        
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)],
-        aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1,
+        OPERAND2);
     return 3;
 }
 
-static int disasm_mov_bitaddr_c(struct em8051 *aCPU, int aPosition, char *aBuffer) 
+static uint8_t disasm_mov_bitaddr_c(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"MOV   %s, C",
         baddr);
     return 2;
 }
 
-static int disasm_movc_a_indir_a_dptr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_movc_a_indir_a_dptr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOVC  A, @A+DPTR");
     return 1;
 }
 
-static int disasm_subb_a_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_subb_a_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"SUBB  A, #%02Xh",
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPERAND1);
     return 2;
 }
 
-static int disasm_subb_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer) 
+static uint8_t disasm_subb_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"SUBB  A, %s",
         mem);
     
     return 2;
 }
-static int disasm_subb_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_subb_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"SUBB  A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_orl_c_compl_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_c_compl_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"ORL   C, /%s",
         baddr);
     return 2;
 }
 
-static int disasm_mov_c_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer) 
+static uint8_t disasm_mov_c_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"MOV   C, %s",
         baddr);
     return 2;
 }
 
-static int disasm_inc_dptr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_inc_dptr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"INC   DPTR");
     return 1;
 }
 
-static int disasm_mul_ab(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mul_ab(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MUL   AB");
     return 1;
 }
 
-static int disasm_mov_indir_rx_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_indir_rx_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   @R%d, %s",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1,
+        OPCODE&1,
         mem);
     
     return 2;
 }
 
 
-static int disasm_anl_c_compl_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_c_compl_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"ANL   C, /%s",
         baddr);
     return 2;
 }
 
 
-static int disasm_cpl_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cpl_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"CPL   %s",
         baddr);
     return 2;
 }
 
-static int disasm_cpl_c(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cpl_c(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CPL   C");
     return 1;
 }
 
-static int disasm_cjne_a_imm_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cjne_a_imm_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CJNE  A, #%02Xh, #%+d",
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)],
-        (signed char)(aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]));
+        OPERAND1,
+        (signed char)(OPERAND2));
     return 3;
 }
 
-static int disasm_cjne_a_mem_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cjne_a_mem_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"CJNE  A, %s, #%+d",
         mem,
-        (signed char)(aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]));
+        (signed char)(OPERAND2));
     
     return 3;
 }
-static int disasm_cjne_indir_rx_imm_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cjne_indir_rx_imm_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CJNE  @R%d, #%02Xh, #%+d",
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1,
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)],
-        (signed char)(aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]));
+        OPCODE&1,
+        OPERAND1,
+        (signed char)(OPERAND2));
     return 3;
 }
 
-static int disasm_push_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_push_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"PUSH  %s",
         mem);
     
@@ -803,280 +813,280 @@ static int disasm_push_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
 }
 
 
-static int disasm_clr_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_clr_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"CLR   %s",
         baddr);
     return 2;
 }
 
-static int disasm_clr_c(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_clr_c(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CLR   C");
     return 1;
 }
 
-static int disasm_swap_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_swap_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"SWAP  A");
     return 1;
 }
 
-static int disasm_xch_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xch_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"XCH   A, %s",
         mem);
     
     return 2;
 }
 
-static int disasm_xch_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xch_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"XCH   A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_pop_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_pop_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"POP   %s",
         mem);
     
     return 2;
 }
 
-static int disasm_setb_bitaddr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_setb_bitaddr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     char baddr[16];
-    bitaddr_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], baddr);
+    bitaddr_memonic(OPERAND1, baddr);
     sprintf(aBuffer,"SETB  %s",
         baddr);
     return 2;
 }
 
-static int disasm_setb_c(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_setb_c(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"SETB  C");
     return 1;
 }
 
-static int disasm_da_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_da_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"DA    A");
     return 1;
 }
 
-static int disasm_djnz_mem_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_djnz_mem_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"DJNZ  %s, #%+d",        
         mem,
-        (signed char)(aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]));
+        (signed char)(OPERAND2));
     return 3;
 }
 
-static int disasm_xchd_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xchd_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"XCHD  A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_movx_a_indir_dptr(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_movx_a_indir_dptr(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOVX  A, @DPTR");
     return 1;
 }
 
-static int disasm_movx_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_movx_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOVX  A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
-static int disasm_clr_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_clr_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CLR   A");
     return 1;
 }
 
-static int disasm_mov_a_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_a_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   A, %s",
         mem);
     
     return 2;
 }
 
-static int disasm_mov_a_indir_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_a_indir_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOV   A, @R%d",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
 
-static int disasm_movx_indir_dptr_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_movx_indir_dptr_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOVX  @DPTR, A");
     return 1;
 }
 
-static int disasm_movx_indir_rx_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_movx_indir_rx_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOVX  @R%d, A",        
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
-static int disasm_cpl_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cpl_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CPL   A");
     return 1;
 }
 
-static int disasm_mov_mem_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_mem_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   %s, A",
         mem);
     
     return 2;
 }
 
-static int disasm_mov_indir_rx_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_indir_rx_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOV   @R%d, A",
-        aCPU->mCodeMem[(aPosition)&(aCPU->mCodeMemSize-1)]&1);
+        OPCODE&1);
     return 1;
 }
 
-static int disasm_nop(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_nop(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    if (aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)])
+    if (OPCODE)
         sprintf(aBuffer,"??UNKNOWN");
     else
         sprintf(aBuffer,"NOP");
     return 1;
 }
 
-static int disasm_inc_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_inc_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"INC   R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"INC   R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_dec_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_dec_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"DEC   R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"DEC   R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_add_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_add_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"ADD   A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"ADD   A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_addc_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_addc_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"ADDC  A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"ADDC  A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_orl_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_orl_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"ORL   A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"ORL   A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_anl_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_anl_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"ANL   A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"ANL   A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_xrl_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xrl_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"XRL   A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"XRL   A, R%d",OPCODE&7);
     return 1;
 }
 
 
-static int disasm_mov_rx_imm(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_rx_imm(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"MOV   R%d, #%02Xh",
-        aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7,
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPCODE&7,
+        OPERAND1);
     return 2;
 }
 
-static int disasm_mov_mem_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_mem_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   %s, R%d",
         mem,
-        aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+        OPCODE&7);
     
     return 2;
 }
 
-static int disasm_subb_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_subb_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"SUBB  A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"SUBB  A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_mov_rx_mem(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_rx_mem(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    char mem[16];mem_memonic(aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)], mem);
+    char mem[16];mem_memonic(OPERAND1, mem);
     sprintf(aBuffer,"MOV   R%d, %s",
-        aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7,
+        OPCODE&7,
         mem);
     
     return 2;
 }
 
-static int disasm_cjne_rx_imm_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_cjne_rx_imm_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"CJNE  R%d, #%02Xh, #%+d",
-        aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7,
-        aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)],
-        (signed char)aCPU->mCodeMem[(aPosition + 2)&(aCPU->mCodeMemSize-1)]);
+        OPCODE&7,
+        OPERAND1,
+        (signed char)OPERAND2);
     return 3;
 }
 
-static int disasm_xch_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_xch_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"XCH   A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"XCH   A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_djnz_rx_offset(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_djnz_rx_offset(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
     sprintf(aBuffer,"DJNZ  R%d, #%+d",
-        aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7,
-        (signed char)aCPU->mCodeMem[(aPosition + 1)&(aCPU->mCodeMemSize-1)]);
+        OPCODE&7,
+        (signed char)OPERAND1);
     return 2;
 }
 
-static int disasm_mov_a_rx(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_a_rx(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"MOV   A, R%d",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"MOV   A, R%d",OPCODE&7);
     return 1;
 }
 
-static int disasm_mov_rx_a(struct em8051 *aCPU, int aPosition, char *aBuffer)
+static uint8_t disasm_mov_rx_a(struct em8051 *aCPU, uint16_t aPosition, char *aBuffer)
 {
-    sprintf(aBuffer,"MOV   R%d, A",aCPU->mCodeMem[aPosition&(aCPU->mCodeMemSize-1)]&7);
+    sprintf(aBuffer,"MOV   R%d, A",OPCODE&7);
     return 1;
 }
 
