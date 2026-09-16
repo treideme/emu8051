@@ -1358,9 +1358,11 @@ static uint8_t xchd_a_indir_rx(struct em8051 *aCPU)
 {
     uint8_t address = INDIR_RX_ADDRESS;
     uint8_t value = read_mem_indir(aCPU, address);
+    // Write the memory byte back before overwriting the Accumulator:
+    // this is an exchange, so the nibble stored must be the one the
+    // Accumulator held on entry.
+    write_mem_indir(aCPU, address, (value & 0xf0) | (ACC & 0x0f));
     ACC = (ACC & 0xf0) | (value & 0x0f);
-    value = (value & 0xf0) | (ACC & 0x0f);
-    write_mem_indir(aCPU, address, value);
     PC++;
     return 0;
 }
