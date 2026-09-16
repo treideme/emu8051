@@ -19,8 +19,12 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pysim import Simulator  # noqa: E402
 
-STAGING_BUILD = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "demo-projects", "build"
+# Compiled 8051 demo projects to run against. Point EMU8051_DEMO_BUILD at the
+# build directory of whichever demo repo you use; the default assumes a
+# sibling checkout next to this one.
+STAGING_BUILD = os.environ.get(
+    "EMU8051_DEMO_BUILD",
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "demo-projects", "build"),
 )
 
 

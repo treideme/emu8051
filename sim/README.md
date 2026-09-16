@@ -260,7 +260,7 @@ each wire it to their own pin.
   - **`hc573_create()` in `sim/devices/hc573.c`** initialized its
     `transparent` (LE-open) flag to 0 unconditionally, on the assumption
     that any firmware driving this latch would explicitly write LE at
-    least once. `clock_digit_tube` never does -- it relies on the
+    least once. a clock demo of that shape never does -- it relies on the
     8051's port power-on default (P1=0xFF) to leave LE permanently high
     -- so the flag stayed stuck closed forever, since the only other
     place it's set is the LE-write callback, which needs a write *event*

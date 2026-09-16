@@ -14,9 +14,18 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pysim import Simulator  # noqa: E402
 
-STAGING_BUILD = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "demo-projects", "build"
+# Compiled 8051 demo projects to run against. Point EMU8051_DEMO_BUILD at the
+# build directory of whichever demo repo you use; the default assumes a
+# sibling checkout next to this one.
+STAGING_BUILD = os.environ.get(
+    "EMU8051_DEMO_BUILD",
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "demo-projects", "build"),
 )
+
+
+# Name of the clock/7-segment demo binary to exercise. Override with
+# EMU8051_CLOCK_DEMO_HEX if your demo projects use a different name.
+CLOCK_DEMO_HEX = os.environ.get("EMU8051_CLOCK_DEMO_HEX", "clock_digit_tube.hex")
 
 
 def hexpath(name):
@@ -98,7 +107,7 @@ class DS1302Tests(unittest.TestCase):
             hours = sim.ds1302_register(2)
             self.assertNotEqual(hours, 0xFF, "read never completed (still floating)")
 
-    @skip_unless_built("clock_digit_tube.hex")
+    @skip_unless_built(CLOCK_DEMO_HEX)
     def test_digits_survive_boot_without_stale_latch(self):
         # Regression test for a bug where 74HC573 outputs default to
         # transparent=0 (calloc'd) regardless of LE's actual level. This
@@ -110,7 +119,7 @@ class DS1302Tests(unittest.TestCase):
         # thought it was 0/latched) and then never recapture it, since
         # data-bus writes wrongly no-op'd on grounds the latch was closed.
         VALID_SEGMENTS = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f, 0x40}
-        with Simulator("hc6800_es", hexpath("clock_digit_tube.hex")) as sim:
+        with Simulator("hc6800_es", hexpath(CLOCK_DEMO_HEX)) as sim:
             sim.enable_ds1302()
             sim.enable_digit_display(8)
             sim.step_instructions(500_000)
