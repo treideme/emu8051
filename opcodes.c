@@ -111,7 +111,18 @@ static void write_mem_indir(struct em8051 *aCPU, uint8_t aAddress, uint8_t value
 void push_to_stack(struct em8051 *aCPU, uint8_t aValue)
 {
     aCPU->mSFR[REG_SP]++;
-    write_mem(aCPU, aCPU->mSFR[REG_SP], aValue);
+    // The stack is reached by indirect addressing, so it can occupy the
+    // Upper 128 but never SFR space. Without the Upper 128 a byte pushed
+    // above 7fh is lost, which is what EXCEPTION_STACK reports.
+    if (aCPU->mSFR[REG_SP] > 0x7f && !aCPU->mUpperData)
+    {
+        if (aCPU->except)
+            aCPU->except(aCPU, EXCEPTION_STACK);
+    }
+    else
+    {
+        write_mem_indir(aCPU, aCPU->mSFR[REG_SP], aValue);
+    }
     if (aCPU->mSFR[REG_SP] == 0)
         if (aCPU->except)
             aCPU->except(aCPU, EXCEPTION_STACK);
@@ -119,7 +130,16 @@ void push_to_stack(struct em8051 *aCPU, uint8_t aValue)
 
 static uint8_t pop_from_stack(struct em8051 *aCPU)
 {
-    uint8_t value = read_mem(aCPU, aCPU->mSFR[REG_SP]);
+    uint8_t value = BAD_VALUE;
+    if (aCPU->mSFR[REG_SP] > 0x7f && !aCPU->mUpperData)
+    {
+        if (aCPU->except)
+            aCPU->except(aCPU, EXCEPTION_STACK);
+    }
+    else
+    {
+        value = read_mem_indir(aCPU, aCPU->mSFR[REG_SP]);
+    }
     aCPU->mSFR[REG_SP]--;
 
     if (aCPU->mSFR[REG_SP] == 0xff)
