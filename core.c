@@ -416,9 +416,11 @@ void handle_interrupts(struct em8051 *aCPU)
     push_to_stack(aCPU, aCPU->mPC & 0xff);
     push_to_stack(aCPU, aCPU->mPC >> 8);
     aCPU->mPC = dest_ip;
-    // wait for 2 ticks instead of one since we were not executing
-    // this LCALL before.
-    aCPU->mTickDelay = 2;
+    // The hardware-generated LCALL to the vector costs two machine cycles.
+    // This cycle is the first of them, so one more is still owed -- the
+    // same "extra delay beyond the current cycle" convention the opcode
+    // handlers return.
+    aCPU->mTickDelay = 1;
     switch (dest_ip)
     {
     case ISR_TF0:
@@ -450,14 +452,20 @@ bool tick(struct em8051 *aCPU)
     uint8_t v;
     bool ticked = false;
 
+    // An opcode handler returns the delay *beyond* the cycle it ran in:
+    // 0 for a one-cycle instruction, 1 for a two-cycle one, 3 for MUL/DIV.
+    // So the cycle that executes an instruction is the first of that
+    // instruction's machine cycles, and any remaining ones are burned here,
+    // before the next instruction may start.
     if (aCPU->mTickDelay)
     {
         aCPU->mTickDelay--;
+        timer_tick(aCPU);
+        return false;
     }
 
     // Test for Power Down
-    if (aCPU->mTickDelay == 0 && (aCPU->mSFR[REG_PCON]) & 0x02) {
-        aCPU->mTickDelay = 1;
+    if ((aCPU->mSFR[REG_PCON]) & 0x02) {
         return 1;
     }
 
@@ -475,7 +483,7 @@ bool tick(struct em8051 *aCPU)
         // IDL activate the idle mode to save power
         bool is_idle = (aCPU->mSFR[REG_PCON]) & 0x01;
         if (is_idle) {
-            aCPU->mTickDelay = 1;
+            aCPU->mTickDelay = 0; // idle burns one machine cycle at a time
         } else {
             aCPU->mTickDelay = aCPU->op[aCPU->mCodeMem[aCPU->mPC & (aCPU->mCodeMemMaxIdx)]](aCPU);
         }
