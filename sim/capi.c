@@ -266,6 +266,12 @@ unsigned long sim_get_tick_count(sim_handle_t aSim)
     return ((struct sim *)aSim)->total_ticks;
 }
 
+int sim_get_pc(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    return s->cpu.mPC;
+}
+
 int sim_get_port(sim_handle_t aSim, int aPortIndex)
 {
     struct sim *s = (struct sim *)aSim;

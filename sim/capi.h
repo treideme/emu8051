@@ -88,6 +88,15 @@ extern "C"
     SIM_API long sim_get_instruction_count(sim_handle_t aSim);
     SIM_API unsigned long sim_get_tick_count(sim_handle_t aSim);
 
+    // Program counter, i.e. the address of the instruction that has NOT yet
+    // been executed. Read it after sim_step_instructions(aSim, 1) and it is
+    // an instruction boundary, which is what makes address breakpoints
+    // possible from the host: step one instruction, compare against the
+    // address a symbol table gives you, act before it runs. That is the same
+    // "stop before executing" convention ucSim's `break` uses, so cycle
+    // counts bracketed this way are directly comparable with its.
+    SIM_API int sim_get_pc(sim_handle_t aSim);
+
     // Raw SFR port access. aPortIndex is 0-3 for P0-P3.
     SIM_API int sim_get_port(sim_handle_t aSim, int aPortIndex);
 

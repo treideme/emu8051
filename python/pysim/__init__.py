@@ -92,6 +92,8 @@ class _CAPI:
             lib.sim_get_instruction_count.argtypes = [HANDLE]
             lib.sim_get_tick_count.restype = ctypes.c_ulong
             lib.sim_get_tick_count.argtypes = [HANDLE]
+            lib.sim_get_pc.restype = ctypes.c_int
+            lib.sim_get_pc.argtypes = [HANDLE]
             lib.sim_get_clock_hz.restype = ctypes.c_ulong
             lib.sim_get_clock_hz.argtypes = [HANDLE]
             lib.sim_set_clock_hz.argtypes = [HANDLE, ctypes.c_ulong]
@@ -227,6 +229,13 @@ class Simulator:
     @property
     def tick_count(self) -> int:
         return self._capi.sim_get_tick_count(self._handle)
+
+    @property
+    def pc(self) -> int:
+        """Address of the next instruction to execute. After
+        step_instructions(1) this is an instruction boundary, so comparing it
+        against a .map symbol gives you an address breakpoint."""
+        return self._capi.sim_get_pc(self._handle)
 
     @property
     def clock_hz(self) -> int:
