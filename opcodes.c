@@ -155,7 +155,7 @@ static void add_solve_flags(struct em8051 * aCPU, uint8_t value1, uint8_t value2
     bool carry = ((value1 & 255) + (value2 & 255) + carryin) >> 8;
     
     /* Auxiliary carry: overflow from 3th bit to 4th bit */
-    bool auxcarry = ((value1 & 7) + (value2 & 7) + carryin) >> 3;
+    bool auxcarry = ((value1 & 15) + (value2 & 15) + carryin) >> 4;
     
     /* Overflow: overflow from 6th or 7th bit, but not both */
     bool overflow = (((value1 & 127) + (value2 & 127) + carryin) >> 7)^carry;
@@ -167,7 +167,8 @@ static void add_solve_flags(struct em8051 * aCPU, uint8_t value1, uint8_t value2
 static void sub_solve_flags(struct em8051 * aCPU, uint8_t value1, uint8_t value2, bool carryin)
 {
     bool carry = (((value1 & 255) - (value2 & 255) - carryin) >> 8) & 1;
-    bool auxcarry = (((value1 & 7) - (value2 & 7) - carryin) >> 3) & 1;
+    /* Auxiliary carry: borrow from 4th bit into 3th bit */
+    bool auxcarry = (((value1 & 15) - (value2 & 15) - carryin) >> 4) & 1;
     bool overflow = ((((value1 & 127) - (value2 & 127) - carryin) >> 7) & 1)^carry;
     PSW = (PSW & ~(PSWMASK_C|PSWMASK_AC|PSWMASK_OV)) |
                           (carry << PSW_C) | (auxcarry << PSW_AC) | (overflow << PSW_OV);
