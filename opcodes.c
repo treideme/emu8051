@@ -818,7 +818,9 @@ static uint8_t anl_c_bitaddr(struct em8051 *aCPU)
         PSW = (PSW & ~PSWMASK_C) | (PSWMASK_C * value);
     }
     PC += 2;
-    return 0;
+    // ANL C,bit is 24 oscillator periods (2 machine cycles),
+    // the same as ORL C,bit.
+    return 1;
 }
 
 static uint8_t movc_a_indir_a_pc(struct em8051 *aCPU)
@@ -826,7 +828,9 @@ static uint8_t movc_a_indir_a_pc(struct em8051 *aCPU)
     uint16_t address = PC + 1 + ACC;
     ACC = CODEMEM(address);
     PC++;
-    return 0;
+    // MOVC A,@A+PC is 24 oscillator periods (2 machine cycles),
+    // the same as MOVC A,@A+DPTR.
+    return 1;
 }
 
 static uint8_t div_ab(struct em8051 *aCPU)
@@ -979,7 +983,9 @@ static uint8_t orl_c_compl_bitaddr(struct em8051 *aCPU)
         PSW = (PSW & ~PSWMASK_C) | (PSWMASK_C * value);
     }
     PC += 2;
-    return 0;
+    // ORL C,/bit is 24 oscillator periods (2 machine cycles),
+    // the same as ORL C,bit.
+    return 1;
 }
 
 static uint8_t mov_c_bitaddr(struct em8051 *aCPU)
@@ -1079,7 +1085,9 @@ static uint8_t anl_c_compl_bitaddr(struct em8051 *aCPU)
         PSW = (PSW & ~PSWMASK_C) | (PSWMASK_C * value);
     }
     PC += 2;
-    return 0;
+    // ANL C,/bit is 24 oscillator periods (2 machine cycles),
+    // the same as ORL C,bit.
+    return 1;
 }
 
 
