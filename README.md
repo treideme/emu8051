@@ -1,4 +1,68 @@
-Please see [here](https://www.reidemeister.com/?p=449) for modifications to the original simulator.
+Please see [this blog post](https://reidemeister.com/blog/2022.07.03) for the
+background to these modifications to the original simulator.
+
+The `sim` branch
+================
+
+⚠️ **`sim` goes well beyond Jari's original scope, and it is a highly
+experimental effort of my own.** The upstream project is an 8051/8052 CPU
+emulator with a curses UI; `sim` adds a peripheral-simulation layer around it —
+device models (HD44780, DS1302, XPT2046, 7-segment displays, servo, ENC28J60,
+fan), a flat C API, Python `ctypes` bindings, a PySide6 live view, and a test
+suite that runs against a sibling repository's compiled demo projects.
+
+None of that is upstream's responsibility or its design intent, and it should
+not be read as a criticism of the original where it diverges. **The defect fixes
+on this branch are separate and do apply upstream** — they are listed below and
+are kept as clean patches against upstream's head precisely so the two can be
+told apart.
+
+Maintained fork
+===============
+
+Upstream (`jarikomppa/emu8051`) looks dormant rather than finished: master's most
+recent commit is `5dc6812` (2022-09-11), and **15 pull requests are open**, the
+oldest since 2018. Several of them fix real defects and have been waiting years.
+Jari appears to be busy with other things — entirely fair, it is his project and
+he owes nobody maintenance.
+
+**This fork carries those fixes, and I am happy to maintain it.** Issues and pull
+requests are welcome here. Everything below is a clean patch against upstream's
+head, so if Jari picks the project back up it can all be taken straight across.
+
+**Credit belongs to the people who found these first** — which for three of the four
+is not me. Where a defect was already reported upstream, the PR and its author are
+cited below. The one exception is `MOV direct,@Ri`, fixed here in September 2025,
+before either of the two upstream PRs for it existed. The fix here was derived
+independently and ships with a regression test — the tests are offered as
+supporting evidence for their PRs, not as a competing claim.
+
+| Defect | Reported upstream | Fix here |
+| --- | --- | --- |
+| Every multi-cycle instruction one cycle short — `tick()` consumes a handler's return as the *total* cost while handlers encode the *extra* cost, so 30 of 48 instruction timings are wrong | **not reported** — found here | `core.c` + `opcodes.c`, with the cycle table made consistent |
+| `ANL C,bit`, `ANL C,/bit`, `ORL C,/bit`, `MOVC A,@A+PC` carry 1-cycle costs but are 24-oscillator instructions | **not reported** — found here; masked until the above is fixed | `opcodes.c` |
+| `PUSH`/`POP` above `SP=7FH` address the SFR array instead of upper RAM, so `PUSH ACC` drives P0 and `RET` can return to 0000H | [#38](https://github.com/jarikomppa/emu8051/pull/38) by **nickburgin** | stack operations use indirect addressing |
+| Auxiliary-carry computed across bit 2 instead of bit 3, so `AC` is wrong in both directions and BCD arithmetic misbehaves | [#34](https://github.com/jarikomppa/emu8051/pull/34) by **Borg19l71** | correct nibble boundary |
+| `XCHD A,@Ri` overwrites the accumulator before storing its low nibble, making it a one-way load rather than an exchange | [#32](https://github.com/jarikomppa/emu8051/pull/32) by **cjacker** | low nibble saved first |
+| `MOV direct,@Ri` (0x86/0x87) has source and destination reversed | also [#44](https://github.com/jarikomppa/emu8051/pull/44) by **tixiv** — but **fixed here first**, 2025-09-13, two months before [#41](https://github.com/jarikomppa/emu8051/pull/41) and eight before #44 | same change, derived independently |
+
+On the last one: [#41](https://github.com/jarikomppa/emu8051/pull/41) and
+[#44](https://github.com/jarikomppa/emu8051/pull/44) propose **different** fixes
+for the same opcode. They are not equivalent — #41 changes the accessors and ends
+up implementing `MOV @Ri,direct`, the opposite instruction. Deriving the fix here
+from the instruction set independently produced #44's change, so **#44 is the
+correct one**.
+
+Behaviour was checked against the Intel *MCS-51 Microcontroller Family User's
+Manual* (272383-002) and cross-checked against SDCC's µCsim, which was itself
+first validated against the manual's documented cycle counts and worked examples.
+
+Run the regression tests with:
+
+```
+make -C tests check
+```
+
 
 ----
 Original Documentation
