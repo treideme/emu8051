@@ -575,6 +575,30 @@ unsigned long sim_enc28j60_get_buffer_byte_count(sim_handle_t aSim)
     return enc28j60_get_buffer_byte_count(s->enc28j60);
 }
 
+int sim_enc28j60_inject_rx(sim_handle_t aSim, const unsigned char *aFrame, int aLen)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return ENC28J60_RX_DISABLED;
+    return enc28j60_inject_rx(s->enc28j60, aFrame, aLen);
+}
+
+int sim_enc28j60_tx_count(sim_handle_t aSim)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return 0;
+    return enc28j60_tx_count(s->enc28j60);
+}
+
+int sim_enc28j60_tx_frame(sim_handle_t aSim, int aIndex, unsigned char *aOut, int aMax)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return -1;
+    return enc28j60_tx_frame(s->enc28j60, aIndex, aOut, aMax);
+}
+
 int sim_uart_tx_count(sim_handle_t aSim)
 {
     struct sim *s = (struct sim *)aSim;

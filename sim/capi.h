@@ -169,6 +169,12 @@ extern "C"
     SIM_API int sim_enc28j60_get_bank(sim_handle_t aSim);
     SIM_API int sim_enc28j60_get_last_opcode(sim_handle_t aSim);
     SIM_API unsigned long sim_enc28j60_get_buffer_byte_count(sim_handle_t aSim);
+    // Packet layer (see sim/devices/enc28j60.h): deliver a frame into the RX
+    // buffer (returns 0 or a negative ENC28J60_RX_* code), and read back the
+    // frames the firmware transmitted, oldest first.
+    SIM_API int sim_enc28j60_inject_rx(sim_handle_t aSim, const unsigned char *aFrame, int aLen);
+    SIM_API int sim_enc28j60_tx_count(sim_handle_t aSim);
+    SIM_API int sim_enc28j60_tx_frame(sim_handle_t aSim, int aIndex, unsigned char *aOut, int aMax);
 
     // 4-wire PWM fan: aPwmPort/aPwmBit is the MCU-driven duty-cycle input,
     // aTachPort/aTachBit is the fan-driven tachometer output -- see

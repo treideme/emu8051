@@ -2,6 +2,7 @@
  * Copyright 2025 Thomas Reidemeister, MIT License (see hc573.h)
  */
 #include <stdlib.h>
+#include <string.h>
 #include "enc28j60.h"
 
 #define ADDR_MASK 0x1F
@@ -41,7 +42,47 @@ struct enc28j60
     uint8_t global_regs[5];
     uint8_t buffer[BUFFER_SIZE];
     unsigned long buffer_byte_count;
+
+    // Packet layer (host-injected RX, captured TX) -- see enc28j60.h.
+    uint16_t rx_wr;                            // hardware RX write pointer (ERXWRPT)
+    int tx_count;                              // frames transmitted since creation
+    uint16_t tx_len[ENC28J60_TX_LOG];          // ring of the most recent frames
+    uint8_t tx_frame[ENC28J60_TX_LOG][ENC28J60_MAX_FRAME];
 };
+
+// Register addresses the packet layer reacts to (bank, address).
+#define B0_ERDPTL 0x00
+#define B0_ETXSTL 0x04
+#define B0_ETXNDL 0x06
+#define B0_ERXSTL 0x08
+#define B0_ERXSTH 0x09
+#define B0_ERXNDL 0x0A
+#define B0_ERXRDPTL 0x0C
+#define B0_ERXWRPTL 0x0E
+#define B1_ERXFCON 0x18
+#define B1_EPKTCNT 0x19
+#define REG_EIR 0x1C
+#define REG_ESTAT 0x1D
+#define REG_ECON2 0x1E
+#define REG_ECON1 0x1F
+#define B2_MACON3 0x02
+
+#define ECON1_TXRTS 0x08
+#define ECON1_RXEN 0x04
+#define ECON2_PKTDEC 0x40
+#define ECON2_AUTOINC 0x80
+#define EIR_PKTIF 0x40
+#define EIR_TXIF 0x08
+#define EIR_RXERIF 0x01
+#define ESTAT_CLKRDY 0x01
+#define ERXFCON_UCEN 0x80
+#define ERXFCON_ANDOR 0x40
+#define ERXFCON_BCEN 0x01
+#define ERXFCON_MCEN 0x02
+#define ERXFCON_UNMODELED 0x1C // PMEN | MPEN | HTEN
+
+static uint16_t reg_pair(struct enc28j60 *dev, int bank, uint8_t lo_addr);
+static void set_reg_pair(struct enc28j60 *dev, int bank, uint8_t lo_addr, uint16_t value);
 
 static uint8_t *reg_slot_ptr(struct enc28j60 *dev, int bank, uint8_t addr)
 {
@@ -98,7 +139,12 @@ static void commit_read_byte(struct enc28j60 *dev)
     uint8_t *ptrlo = reg_slot_ptr(dev, 0, 0x00);
     uint8_t *ptrhi = reg_slot_ptr(dev, 0, 0x01);
     uint16_t ptr = (uint16_t)(((*ptrhi << 8) | *ptrlo) % BUFFER_SIZE);
-    ptr = (uint16_t)((ptr + 1) % BUFFER_SIZE);
+    // Like the chip: a read that reaches ERXND wraps to ERXST, so a packet
+    // straddling the end of the circular RX buffer reads back contiguously.
+    if (ptr == reg_pair(dev, 0, B0_ERXNDL))
+        ptr = reg_pair(dev, 0, B0_ERXSTL);
+    else
+        ptr = (uint16_t)((ptr + 1) % BUFFER_SIZE);
     *ptrlo = (uint8_t)(ptr & 0xFF);
     *ptrhi = (uint8_t)(ptr >> 8);
     dev->buffer_byte_count++;
@@ -127,8 +173,86 @@ static void do_soft_reset(struct enc28j60 *dev)
             dev->banked_regs[b][i] = 0;
     for (i = 0; i < 5; i++)
         dev->global_regs[i] = 0;
+    // Non-zero reset values the packet layer depends on (datasheet table
+    // 3-2): AUTOINC on, clock ready, and the default receive filter
+    // UCEN|CRCEN|BCEN.
+    dev->global_regs[REG_ECON2 - 0x1B] = ECON2_AUTOINC;
+    dev->global_regs[REG_ESTAT - 0x1B] = ESTAT_CLKRDY;
+    dev->banked_regs[1][B1_ERXFCON] = 0xA1;
+    dev->rx_wr = 0;
     // Buffer memory (and its byte-count instrumentation) is left alone --
     // the real chip's soft reset doesn't clear packet buffer RAM.
+}
+
+static uint16_t reg_pair(struct enc28j60 *dev, int bank, uint8_t lo_addr)
+{
+    return (uint16_t)((*reg_slot_ptr(dev, bank, lo_addr) |
+                       (*reg_slot_ptr(dev, bank, (uint8_t)(lo_addr + 1)) << 8)) &
+                      (BUFFER_SIZE - 1));
+}
+
+static void set_reg_pair(struct enc28j60 *dev, int bank, uint8_t lo_addr, uint16_t value)
+{
+    *reg_slot_ptr(dev, bank, lo_addr) = (uint8_t)(value & 0xFF);
+    *reg_slot_ptr(dev, bank, (uint8_t)(lo_addr + 1)) = (uint8_t)(value >> 8);
+}
+
+// Transmit: the frame is ETXST+1 .. ETXND inclusive (ETXST holds the
+// per-packet control byte), exactly as the chip reads it -- so a driver
+// that never programs ETXST transmits from wherever ETXST points, as the
+// real part would. Padding to 60 bytes follows MACON3.PADCFG; the CRC the
+// MAC would append (TXCRCEN) is not included in the captured frame.
+static void do_transmit(struct enc28j60 *dev)
+{
+    uint16_t st = reg_pair(dev, 0, B0_ETXSTL);
+    uint16_t nd = reg_pair(dev, 0, B0_ETXNDL);
+    int slot = dev->tx_count % ENC28J60_TX_LOG;
+    int len = 0;
+    uint16_t p = (uint16_t)((st + 1) & (BUFFER_SIZE - 1));
+
+    if (nd >= st)
+    {
+        while (len < ENC28J60_MAX_FRAME)
+        {
+            dev->tx_frame[slot][len++] = dev->buffer[p];
+            if (p == nd)
+                break;
+            p = (uint16_t)((p + 1) & (BUFFER_SIZE - 1));
+        }
+    }
+    if ((dev->banked_regs[2][B2_MACON3] & 0xE0) != 0)
+        while (len < 60)
+            dev->tx_frame[slot][len++] = 0;
+    dev->tx_len[slot] = (uint16_t)len;
+    dev->tx_count++;
+
+    dev->global_regs[REG_ECON1 - 0x1B] &= (uint8_t)~ECON1_TXRTS;
+    dev->global_regs[REG_EIR - 0x1B] |= EIR_TXIF;
+}
+
+// Side effects of a control-register write (WCR/BFS/BFC).
+static void after_register_write(struct enc28j60 *dev, int bank, uint8_t addr)
+{
+    addr = (uint8_t)(addr & ADDR_MASK);
+    if (addr == REG_ECON1 && (dev->global_regs[REG_ECON1 - 0x1B] & ECON1_TXRTS))
+        do_transmit(dev);
+    if (addr == REG_ECON2 && (dev->global_regs[REG_ECON2 - 0x1B] & ECON2_PKTDEC))
+    {
+        uint8_t *cnt = &dev->banked_regs[1][B1_EPKTCNT];
+        if (*cnt)
+            (*cnt)--;
+        if (!*cnt)
+            dev->global_regs[REG_EIR - 0x1B] &= (uint8_t)~EIR_PKTIF;
+        dev->global_regs[REG_ECON2 - 0x1B] &= (uint8_t)~ECON2_PKTDEC; // self-clearing
+    }
+    // Programming ERXST also moves the hardware write pointer there
+    // (datasheet 6.1). Modelled assumption; the chip documents ERXWRPT as
+    // read-only and hardware-maintained.
+    if (bank == 0 && (addr == B0_ERXSTL || addr == B0_ERXSTH))
+    {
+        dev->rx_wr = reg_pair(dev, 0, B0_ERXSTL);
+        set_reg_pair(dev, 0, B0_ERXWRPTL, dev->rx_wr);
+    }
 }
 
 static void decode_opcode(struct enc28j60 *dev, uint8_t byte)
@@ -181,12 +305,15 @@ static void on_byte_complete(struct enc28j60 *dev, uint8_t byte)
     {
     case OP_WCR:
         *reg_slot_ptr(dev, current_bank(dev), dev->addr) = byte;
+        after_register_write(dev, current_bank(dev), dev->addr);
         break;
     case OP_BFS:
         *reg_slot_ptr(dev, current_bank(dev), dev->addr) |= byte;
+        after_register_write(dev, current_bank(dev), dev->addr);
         break;
     case OP_BFC:
         *reg_slot_ptr(dev, current_bank(dev), dev->addr) &= (uint8_t)~byte;
+        after_register_write(dev, current_bank(dev), dev->addr);
         break;
     case OP_RCR:
         if (dev->needs_dummy)
@@ -266,6 +393,7 @@ enc28j60_t *enc28j60_create(sim_bus_t *aBus, struct em8051 *aCPU, enc28j60_pins_
     int i;
 
     dev->pins = aPins;
+    do_soft_reset(dev); // power-on register values, not all-zero
     dev->last_cs = pin_get(aCPU, aPins.cs);
     dev->last_sck = pin_get(aCPU, aPins.sck);
 
@@ -316,4 +444,122 @@ uint8_t enc28j60_get_last_opcode(const enc28j60_t *aDev)
 unsigned long enc28j60_get_buffer_byte_count(const enc28j60_t *aDev)
 {
     return aDev->buffer_byte_count;
+}
+
+static uint32_t crc32_ieee(const uint8_t *data, int len)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    int i, b;
+    for (i = 0; i < len; i++)
+    {
+        crc ^= data[i];
+        for (b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)-(int32_t)(crc & 1));
+    }
+    return ~crc;
+}
+
+static int rx_accept(struct enc28j60 *dev, const uint8_t *f)
+{
+    uint8_t fc = dev->banked_regs[1][B1_ERXFCON];
+    static const uint8_t maadr_slot[6] = {0x04, 0x05, 0x02, 0x03, 0x00, 0x01};
+    int bcast = 1, ucast = 1, mcast, i, any = 0, all = 1;
+
+    if (fc == 0)
+        return 1; // promiscuous
+    for (i = 0; i < 6; i++)
+    {
+        if (f[i] != 0xFF)
+            bcast = 0;
+        if (f[i] != dev->banked_regs[3][maadr_slot[i]])
+            ucast = 0;
+    }
+    mcast = (f[0] & 1) && !bcast;
+
+    // PMEN/MPEN/HTEN are not modelled: an enabled one never matches.
+    if (fc & ERXFCON_UCEN) { any |= ucast; all &= ucast; }
+    if (fc & ERXFCON_BCEN) { any |= bcast; all &= bcast; }
+    if (fc & ERXFCON_MCEN) { any |= mcast; all &= mcast; }
+    if (fc & ERXFCON_UNMODELED) all = 0;
+    return (fc & ERXFCON_ANDOR) ? all : any;
+}
+
+int enc28j60_inject_rx(enc28j60_t *aDev, const uint8_t *aFrame, int aLen)
+{
+    struct enc28j60 *dev = aDev;
+    uint16_t st = reg_pair(dev, 0, B0_ERXSTL);
+    uint16_t nd = reg_pair(dev, 0, B0_ERXNDL);
+    uint16_t rd = reg_pair(dev, 0, B0_ERXRDPTL);
+    uint16_t size, used, need, next, p;
+    uint8_t hdr[6];
+    uint32_t crc;
+    int count, i, total;
+
+    if (aLen < 14 || aLen > ENC28J60_MAX_FRAME - 4)
+        return ENC28J60_RX_BAD_LENGTH;
+    if (!(dev->global_regs[REG_ECON1 - 0x1B] & ECON1_RXEN))
+        return ENC28J60_RX_DISABLED;
+    if (nd <= st)
+        return ENC28J60_RX_DISABLED;
+    if (!rx_accept(dev, aFrame))
+        return ENC28J60_RX_FILTERED;
+
+    size = (uint16_t)(nd - st + 1);
+    count = aLen + 4;                       // byte count includes the FCS
+    need = (uint16_t)((6 + count + 1) & ~1u); // packets start on even addresses
+    used = (uint16_t)((dev->rx_wr + size - rd) % size);
+    if ((uint16_t)(used + need) >= size)
+    {
+        dev->global_regs[REG_EIR - 0x1B] |= EIR_RXERIF;
+        return ENC28J60_RX_OVERFLOW;
+    }
+
+    next = (uint16_t)(st + ((dev->rx_wr - st + need) % size));
+    crc = crc32_ieee(aFrame, aLen);
+    hdr[0] = (uint8_t)(next & 0xFF);
+    hdr[1] = (uint8_t)(next >> 8);
+    hdr[2] = (uint8_t)(count & 0xFF);
+    hdr[3] = (uint8_t)(count >> 8);
+    hdr[4] = 0x80;                          // status bit 23: received OK
+    hdr[5] = (uint8_t)(((aFrame[0] & 1) ? 0x01 : 0) | // bit 24 multicast
+                       ((aFrame[0] == 0xFF) ? 0x02 : 0)); // bit 25 broadcast
+
+    p = dev->rx_wr;
+    total = 6 + count;
+    for (i = 0; i < total; i++)
+    {
+        uint8_t b;
+        if (i < 6)
+            b = hdr[i];
+        else if (i < 6 + aLen)
+            b = aFrame[i - 6];
+        else
+            b = (uint8_t)(crc >> (8 * (i - 6 - aLen)));
+        dev->buffer[p] = b;
+        p = (p == nd) ? st : (uint16_t)(p + 1);
+    }
+    dev->rx_wr = next;
+    set_reg_pair(dev, 0, B0_ERXWRPTL, next);
+    if (dev->banked_regs[1][B1_EPKTCNT] < 0xFF)
+        dev->banked_regs[1][B1_EPKTCNT]++;
+    dev->global_regs[REG_EIR - 0x1B] |= EIR_PKTIF;
+    return ENC28J60_RX_OK;
+}
+
+int enc28j60_tx_count(const enc28j60_t *aDev)
+{
+    return aDev->tx_count;
+}
+
+int enc28j60_tx_frame(const enc28j60_t *aDev, int aIndex, uint8_t *aOut, int aMax)
+{
+    int slot, len;
+    if (aIndex < 0 || aIndex >= aDev->tx_count || aIndex < aDev->tx_count - ENC28J60_TX_LOG)
+        return -1;
+    slot = aIndex % ENC28J60_TX_LOG;
+    len = aDev->tx_len[slot];
+    if (len > aMax)
+        len = aMax;
+    memcpy(aOut, aDev->tx_frame[slot], (size_t)len);
+    return aDev->tx_len[slot];
 }

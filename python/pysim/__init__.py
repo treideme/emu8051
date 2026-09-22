@@ -158,6 +158,12 @@ class _CAPI:
             lib.sim_enc28j60_get_last_opcode.argtypes = [HANDLE]
             lib.sim_enc28j60_get_buffer_byte_count.restype = ctypes.c_ulong
             lib.sim_enc28j60_get_buffer_byte_count.argtypes = [HANDLE]
+            lib.sim_enc28j60_inject_rx.restype = ctypes.c_int
+            lib.sim_enc28j60_inject_rx.argtypes = [HANDLE, ctypes.c_char_p, ctypes.c_int]
+            lib.sim_enc28j60_tx_count.restype = ctypes.c_int
+            lib.sim_enc28j60_tx_count.argtypes = [HANDLE]
+            lib.sim_enc28j60_tx_frame.restype = ctypes.c_int
+            lib.sim_enc28j60_tx_frame.argtypes = [HANDLE, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
 
             lib.sim_enable_fan.restype = ctypes.c_int
             lib.sim_enable_fan.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
@@ -355,6 +361,27 @@ class Simulator:
 
     def enc28j60_buffer_byte_count(self) -> int:
         return self._capi.sim_enc28j60_get_buffer_byte_count(self._handle)
+
+    # Status codes from enc28j60_inject_rx (sim/devices/enc28j60.h).
+    ENC_RX_OK, ENC_RX_DISABLED, ENC_RX_FILTERED, ENC_RX_OVERFLOW, ENC_RX_BAD_LENGTH = 0, -1, -2, -3, -4
+
+    def enc28j60_inject(self, frame: bytes) -> int:
+        """Deliver an Ethernet frame (no FCS) into the ENC28J60's RX buffer.
+        Returns ENC_RX_OK or a negative ENC_RX_* code (filtered, overflow...)."""
+        return self._capi.sim_enc28j60_inject_rx(self._handle, bytes(frame), len(frame))
+
+    def enc28j60_tx_count(self) -> int:
+        return self._capi.sim_enc28j60_tx_count(self._handle)
+
+    def enc28j60_tx_frames(self, start: int = 0) -> list[bytes]:
+        """Frames the firmware transmitted, from index `start` on (FCS excluded)."""
+        out = []
+        buf = ctypes.create_string_buffer(1536)
+        for i in range(start, self.enc28j60_tx_count()):
+            n = self._capi.sim_enc28j60_tx_frame(self._handle, i, buf, len(buf))
+            if n >= 0:
+                out.append(buf.raw[:n])
+        return out
 
     def enable_fan(self, pwm, tach):
         """Each of pwm/tach is a (port, bit) tuple."""

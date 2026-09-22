@@ -233,10 +233,17 @@ each wire it to their own pin.
   register file (with the five all-bank registers shared across banks,
   matching the real chip), READ_BUF_MEM/WRITE_BUF_MEM against an 8KB
   buffer with ERDPT/EWRPT auto-increment, SOFT_RESET, and the RCR
-  dummy-byte quirk for MAC/MII registers. Deliberately **not** a network
-  stack: no packet TX/RX, no PHY link, no electrical timing -- it exists
-  to prove a driver's opcode framing and bank-select sequencing are
-  correct, nothing past that.
+  dummy-byte quirk for MAC/MII registers. Since branch `enc28j60-net` it
+  also has a **packet layer**: `sim_enc28j60_inject_rx()` lays a frame into
+  the circular RX buffer exactly as the chip does (6-byte header, FCS,
+  even alignment, EPKTCNT/PKTIF/PKTDEC, read wrap at ERXND, the ERXFCON
+  unicast/broadcast/multicast filter against MAADR), and setting
+  ECON1.TXRTS captures ETXST+1..ETXND as a transmitted frame
+  (`sim_enc28j60_tx_frame()`). Still **not** modelled: the PHY/link, DMA and
+  checksum engine, TX status vectors, pattern-match/hash filters, and any
+  electrical timing -- including the silicon errata on slow SPI clocks, so a
+  passing bit-banged driver here proves protocol, not that the real part
+  accepts it. Used by `python/tests/test_enc28j60_net.py`.
 - None of this models a peripheral chip's *electrical* behavior --
   there's no ADC reference voltage, no RTC crystal drift/inaccuracy
   (DS1302's clock advances at exactly `clock_hz/12` real seconds per
