@@ -11,5 +11,6 @@ uv run --quiet --no-project --python 3.12 --with ziglang python -m ziglang cc \
   sim/bus.c sim/capi.c sim/boards/hc6800_es.c \
   sim/devices/hd44780.c sim/devices/hc573.c sim/devices/hc138.c \
   sim/devices/digit_display.c sim/devices/ds1302.c sim/devices/xpt2046.c \
-  sim/devices/servo.c sim/devices/enc28j60.c sim/devices/fan.c
+  sim/devices/servo.c sim/devices/enc28j60.c sim/devices/fan.c \
+  sim/devices/iap.c
 echo "built build/libem8051sim.dll"

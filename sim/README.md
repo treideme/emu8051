@@ -308,3 +308,30 @@ bug in that driver, a gap in this core's Timer2 model. That's why
 `09_ethernet_diag.hex` (a UART-free variant of the same real
 `enc28j60.c` driver) is what the tests and `sim_gui.py`'s ENC28J60 panel
 actually exercise; see `09_ethernet/diag_no_uart.c`'s own comment.
+
+## STC ISP/IAP flash programming (`devices/iap.c`)
+
+`sim_enable_iap(sim, profile)` models the six SFRs STC parts use to read,
+byte-program and sector-erase their own flash, plus `SWRST`/`SWBS` software
+reset. Call it **before** `sim_load_hex()`: it fills code memory with `FFh`
+so unprogrammed flash reads as erased flash does (the core's array is
+`calloc`-zeroed).
+
+| Profile | SFRs | Trigger | Writable from user code |
+| --- | --- | --- | --- |
+| `0` STC89C52RC | `E2h–E7h` | `46h`, `B9h` | Data Flash `2000h–2FFFh` only (a separate array); application-area commands are counted as *ignored* (EN-271 p. 204) |
+| `1` IAP15 | `C2h–C7h` | `5Ah`, `A5h` | program memory itself (STC15 datasheet p. 487) |
+
+Program is a bitwise AND, erase sets a 512-byte sector to `FFh`. A `SWRST`
+write is performed after the current instruction completes (resetting inside
+the SFR-write callback would let that instruction's own PC update run after
+the reset), and keeps `ISPEN`/`SWBS`. `SWBS=1` is counted as an entry into
+STC's ROM ISP monitor, which is not modelled; like the real monitor with no
+host, it falls back to the application. Not modelled: erase/program time,
+endurance, brown-out during a command. `sim_iap_peek/poke/stat` and
+`sim_peek_code` give tests the host view. See
+`python/tests/test_iap_bootloader.py`.
+
+`sim_reset()` now re-anchors the UART TX ring: before, the core's ring
+position survived a reset while the counters didn't, so the first byte read
+back after any reset was a stale pre-reset byte.
