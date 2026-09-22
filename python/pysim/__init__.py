@@ -141,6 +141,17 @@ class _CAPI:
             lib.sim_uart_tx_byte.argtypes = [HANDLE, ctypes.c_int]
             lib.sim_uart_inject_rx.argtypes = [HANDLE, ctypes.c_ubyte]
 
+            lib.sim_enable_iap.restype = ctypes.c_int
+            lib.sim_enable_iap.argtypes = [HANDLE, ctypes.c_int]
+            lib.sim_iap_peek.restype = ctypes.c_int
+            lib.sim_iap_peek.argtypes = [HANDLE, ctypes.c_int]
+            lib.sim_iap_poke.restype = ctypes.c_int
+            lib.sim_iap_poke.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int]
+            lib.sim_iap_stat.restype = ctypes.c_long
+            lib.sim_iap_stat.argtypes = [HANDLE, ctypes.c_int]
+            lib.sim_peek_code.restype = ctypes.c_int
+            lib.sim_peek_code.argtypes = [HANDLE, ctypes.c_int]
+
             lib.sim_enable_servo.restype = ctypes.c_int
             lib.sim_enable_servo.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
             lib.sim_servo_get_pulse_us.restype = ctypes.c_int
@@ -323,6 +334,30 @@ class Simulator:
 
     def uart_inject_rx(self, byte: int):
         self._capi.sim_uart_inject_rx(self._handle, byte)
+
+    # --- STC ISP/IAP flash programming (sim/devices/iap.h) -------------
+    IAP_STC89C52RC = 0  # E2h-E7h, 46h/B9h, Data Flash 2000h-2FFFh only
+    IAP_IAP15 = 1       # C2h-C7h, 5Ah/A5h, program memory writable
+    IAP_STATS = ("reads", "programs", "erases", "ignored", "soft_resets", "isp_entries")
+
+    def enable_iap(self, profile: int) -> None:
+        """Call BEFORE load_hex(): code memory is filled with FFh (erased flash)."""
+        if self._capi.sim_enable_iap(self._handle, profile) != 0:
+            raise RuntimeError("sim_enable_iap failed")
+
+    def iap_peek(self, address: int) -> int:
+        return self._capi.sim_iap_peek(self._handle, address)
+
+    def iap_poke(self, address: int, value: int) -> None:
+        if self._capi.sim_iap_poke(self._handle, address, value) != 0:
+            raise ValueError(f"0x{address:04X} is outside the IAP-writable range")
+
+    def iap_stats(self) -> dict:
+        return {name: self._capi.sim_iap_stat(self._handle, i)
+                for i, name in enumerate(self.IAP_STATS)}
+
+    def peek_code(self, address: int) -> int:
+        return self._capi.sim_peek_code(self._handle, address)
 
     # --- external peripherals: not part of any board catalog (see
     # capi.h's own note) -- caller passes its own assumed pin wiring,

@@ -13,6 +13,7 @@
 #include "devices/servo.h"
 #include "devices/enc28j60.h"
 #include "devices/fan.h"
+#include "devices/iap.h"
 #include "boards/hc6800_es.h"
 
 #define MAX_EXCEPTIONS 64
@@ -43,6 +44,7 @@ struct sim
     servo_t *servo; // external peripheral, not board-catalog: see capi.h
     enc28j60_t *enc28j60;
     fan_t *fan;
+    iap_t *iap; // flash-programming SFRs, see devices/iap.h
 
     int exceptions[MAX_EXCEPTIONS];
     int exception_count;
@@ -50,6 +52,7 @@ struct sim
     int total_tx_count; // see sim_uart_tx_count -- cpu.serial_out_idx alone
                          // wraps at 18 and can't tell "0 sent" from "18 sent"
     int last_tx_idx;
+    int tx_origin; // serial_out[] slot of TX byte 0 since the last reset
 
     long total_instructions;
     unsigned long total_ticks;
@@ -142,6 +145,8 @@ void sim_close(sim_handle_t aSim)
         enc28j60_destroy(s->enc28j60);
     if (s->fan)
         fan_destroy(s->fan);
+    if (s->iap)
+        iap_destroy(s->iap);
     bus_destroy(s->bus);
     free(s->cpu.mCodeMem);
     free(s->cpu.mExtData);
@@ -174,10 +179,17 @@ void sim_reset(sim_handle_t aSim)
     // the *post*-reset power-on port state, not whatever was there a moment
     // ago.
     reset(&s->cpu, 0);
+    if (s->iap)
+        iap_power_on(s->iap); // host reset = power cycle: ISPEN/SWBS clear
 
     s->exception_count = 0;
     s->total_tx_count = 0;
-    s->last_tx_idx = 0;
+    // The core's ring position survives reset(); byte 0 of the new run lands
+    // wherever it points. Re-anchoring here (rather than assuming slot 0)
+    // stops sim_uart_tx_byte() from returning pre-reset bytes, and stops
+    // post_tick() counting a phantom byte because last_tx_idx != serial_out_idx.
+    s->last_tx_idx = s->cpu.serial_out_idx;
+    s->tx_origin = s->cpu.serial_out_idx;
     s->total_instructions = 0;
     s->total_ticks = 0;
 
@@ -210,6 +222,8 @@ static void post_tick(struct sim *s)
         servo_step(s->servo);
     if (s->fan)
         fan_step(s->fan);
+    if (s->iap)
+        iap_post_tick(s->iap);
     if (s->cpu.serial_out_idx != s->last_tx_idx)
     {
         // Can only ever differ by one byte per tick (transmitting a byte
@@ -591,7 +605,7 @@ int sim_uart_tx_byte(sim_handle_t aSim, int aIndex)
     int cap = (int)sizeof(s->cpu.serial_out);
     if (aIndex < 0 || aIndex >= s->total_tx_count)
         return -1;
-    return (unsigned char)s->cpu.serial_out[aIndex % cap];
+    return (unsigned char)s->cpu.serial_out[(s->tx_origin + aIndex) % cap];
 }
 
 void sim_uart_inject_rx(sim_handle_t aSim, unsigned char aByte)
@@ -601,4 +615,37 @@ void sim_uart_inject_rx(sim_handle_t aSim, unsigned char aByte)
     s->cpu.mSFR[REG_SCON] |= SCONMASK_RI;
     if (s->cpu.mSFR[REG_IE] & IEMASK_ES)
         s->cpu.serial_interrupt_trigger = 1;
+}
+
+int sim_enable_iap(sim_handle_t aSim, int aProfile)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s)
+        return -1;
+    if (!s->iap)
+        s->iap = iap_create(s->bus, &s->cpu, (iap_profile_t)aProfile);
+    return s->iap ? 0 : -1;
+}
+
+int sim_iap_peek(sim_handle_t aSim, int aAddress)
+{
+    return iap_peek(((struct sim *)aSim)->iap, aAddress);
+}
+
+int sim_iap_poke(sim_handle_t aSim, int aAddress, int aValue)
+{
+    return iap_poke(((struct sim *)aSim)->iap, aAddress, aValue);
+}
+
+long sim_iap_stat(sim_handle_t aSim, int aWhich)
+{
+    return iap_stat(((struct sim *)aSim)->iap, aWhich);
+}
+
+int sim_peek_code(sim_handle_t aSim, int aAddress)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s || aAddress < 0 || aAddress > s->cpu.mCodeMemMaxIdx)
+        return -1;
+    return s->cpu.mCodeMem[aAddress];
 }

@@ -189,6 +189,23 @@ extern "C"
     // simulating a byte having just arrived over UART.
     SIM_API void sim_uart_inject_rx(sim_handle_t aSim, unsigned char aByte);
 
+    // STC ISP/IAP flash-programming SFRs (sim/devices/iap.h). aProfile:
+    // 0 = STC89C52RC (E2h-E7h, 46h/B9h, only Data Flash 2000h-2FFFh is
+    // reachable - application-area commands are ignored, as EN-271 p. 204
+    // says), 1 = IAP15-style (C2h-C7h, 5Ah/A5h, program memory itself is
+    // writable). Call BEFORE sim_load_hex(): it fills code memory with FFh
+    // so unprogrammed flash reads as erased flash does.
+    SIM_API int sim_enable_iap(sim_handle_t aSim, int aProfile);
+    // Host view of the flash IAP acts on (Data Flash / program memory);
+    // -1 outside the writable range. poke is for test setup only.
+    SIM_API int sim_iap_peek(sim_handle_t aSim, int aAddress);
+    SIM_API int sim_iap_poke(sim_handle_t aSim, int aAddress, int aValue);
+    // 0 reads, 1 programs, 2 erases, 3 ignored (out of range),
+    // 4 software resets to AP, 5 entries into the ROM ISP monitor.
+    SIM_API long sim_iap_stat(sim_handle_t aSim, int aWhich);
+    // Raw code-memory byte (what MOVC / the CPU fetch sees).
+    SIM_API int sim_peek_code(sim_handle_t aSim, int aAddress);
+
 #ifdef __cplusplus
 }
 #endif
