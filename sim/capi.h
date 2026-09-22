@@ -121,6 +121,13 @@ extern "C"
     // as it returns the count). aOutCodes must hold at least aMaxCodes ints.
     SIM_API int sim_get_exceptions(sim_handle_t aSim, int *aOutCodes, int aMaxCodes);
 
+    // Model a part's on-chip XRAM size (e.g. 256 for STC89C52RC, 1024 for
+    // STC89C5xRD+). Any MOVX at or above it is recorded as exception
+    // SIM_EXCEPTION_XRAM_RANGE (the access itself still goes to the 64 KB
+    // backing store). 0 (the default) disables the check.
+#define SIM_EXCEPTION_XRAM_RANGE 16
+    SIM_API void sim_set_xram_size(sim_handle_t aSim, unsigned long aBytes);
+
     // --- Peripheral models: each is created lazily on its first
     // sim_enable_*() call (idempotent -- calling again is a no-op) and
     // wired to whatever pins aBoardName's catalog says. Query/stimulus

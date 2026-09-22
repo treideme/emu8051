@@ -57,6 +57,8 @@ struct sim
     stim_entry_t stim[MAX_STIM];
     int stim_count;
     int stim_port_registered[4];
+
+    unsigned long xram_size; // 0 = unchecked; see sim_set_xram_size
 };
 
 static void on_sbuf_write(struct em8051 *aCPU, uint8_t aReg, uint8_t aValue, void *aUserData)
@@ -80,6 +82,32 @@ static void on_exception(struct em8051 *aCPU, int aCode)
     struct sim *s = (struct sim *)aCPU;
     if (s->exception_count < MAX_EXCEPTIONS)
         s->exceptions[s->exception_count++] = aCode;
+}
+
+// MOVX past the part's on-chip XRAM. On an STC89 with EXTRAM=0 such an access
+// does not fault: it silently goes to the external bus, i.e. drives P0/P2 --
+// on the HC6800-ES that is the ENC28J60's SPI lines and the LEDs. So it is
+// recorded as a CPU exception rather than allowed to pass unnoticed.
+static uint8_t on_xread(struct em8051 *aCPU, uint16_t aAddress)
+{
+    if (aAddress >= ((struct sim *)aCPU)->xram_size)
+        on_exception(aCPU, SIM_EXCEPTION_XRAM_RANGE);
+    return aCPU->mExtData[aAddress];
+}
+
+static void on_xwrite(struct em8051 *aCPU, uint16_t aAddress, uint8_t aValue)
+{
+    if (aAddress >= ((struct sim *)aCPU)->xram_size)
+        on_exception(aCPU, SIM_EXCEPTION_XRAM_RANGE);
+    aCPU->mExtData[aAddress] = aValue;
+}
+
+void sim_set_xram_size(sim_handle_t aSim, unsigned long aBytes)
+{
+    struct sim *s = (struct sim *)aSim;
+    s->xram_size = aBytes;
+    s->cpu.xread = aBytes ? on_xread : NULL;
+    s->cpu.xwrite = aBytes ? on_xwrite : NULL;
 }
 
 static void on_stim_read(struct em8051 *aCPU, uint8_t aReg, void *aUserData, uint8_t *aOutMask, uint8_t *aOutValue)

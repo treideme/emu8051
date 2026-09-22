@@ -110,6 +110,7 @@ class _CAPI:
 
             lib.sim_get_exceptions.restype = ctypes.c_int
             lib.sim_get_exceptions.argtypes = [HANDLE, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+            lib.sim_set_xram_size.argtypes = [HANDLE, ctypes.c_ulong]
 
             lib.sim_enable_digit_display.restype = ctypes.c_int
             lib.sim_enable_digit_display.argtypes = [HANDLE, ctypes.c_int]
@@ -190,6 +191,8 @@ class Simulator:
         "IRET_ACC_MISMATCH",
         "ILLEGAL_OPCODE",
     ]
+    # Simulator-level exceptions (capi.h), not part of the core's enum.
+    EXTRA_EXCEPTIONS = {16: "XRAM_RANGE"}
 
     def __init__(self, board: str, hexfile: str | None = None):
         self._capi = _CAPI.get()
@@ -276,7 +279,13 @@ class Simulator:
         """Returns and clears CPU exceptions recorded since the last call."""
         buf = (ctypes.c_int * 64)()
         n = self._capi.sim_get_exceptions(self._handle, buf, 64)
-        return [self.EXCEPTION_NAMES[c] if 0 <= c < len(self.EXCEPTION_NAMES) else str(c) for c in buf[:n]]
+        return [self.EXCEPTION_NAMES[c] if 0 <= c < len(self.EXCEPTION_NAMES)
+                else self.EXTRA_EXCEPTIONS.get(c, str(c)) for c in buf[:n]]
+
+    def set_xram_size(self, nbytes: int):
+        """Record a CPU exception for any MOVX at or above nbytes (the part's
+        on-chip XRAM). 0 disables the check. See capi.h."""
+        self._capi.sim_set_xram_size(self._handle, nbytes)
 
     # --- peripherals ---
 
