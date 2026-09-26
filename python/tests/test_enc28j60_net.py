@@ -48,7 +48,11 @@ BCAST_MAC = b"\xff" * 6
 XID = bytes.fromhex("5ad10001")         # net.c
 MTU = 576                               # rungs 1-4
 MTU_BIG = 1500                          # rung 5+
-PINS = dict(cs=(0, 3), sck=(0, 2), mosi=(0, 0), miso=(0, 1))
+# Must match enc.c's defaults. The SPI moved off P0 on 2026-09-26: P0 is
+# open-drain and shares the bus with the always-enabled 74HC245, the LED
+# matrix and the LCD lines, which corrupted every read on real hardware
+# (EREVID 0x06 read back as 0x0C). P1/P3 drive their highs actively and work.
+PINS = dict(cs=(3, 3), sck=(1, 7), mosi=(1, 6), miso=(1, 4))
 
 
 def hexfile(target, rung):
