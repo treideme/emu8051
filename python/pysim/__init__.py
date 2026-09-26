@@ -172,6 +172,10 @@ class _CAPI:
             lib.sim_enc28j60_get_buffer_byte_count.argtypes = [HANDLE]
             lib.sim_enc28j60_inject_rx.restype = ctypes.c_int
             lib.sim_enc28j60_inject_rx.argtypes = [HANDLE, ctypes.c_char_p, ctypes.c_int]
+            lib.sim_enc28j60_poke_buffer.restype = ctypes.c_int
+            lib.sim_enc28j60_poke_buffer.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int]
+            lib.sim_enc28j60_peek_buffer.restype = ctypes.c_int
+            lib.sim_enc28j60_peek_buffer.argtypes = [HANDLE, ctypes.c_int]
             lib.sim_enc28j60_tx_count.restype = ctypes.c_int
             lib.sim_enc28j60_tx_count.argtypes = [HANDLE]
             lib.sim_enc28j60_tx_frame.restype = ctypes.c_int
@@ -413,6 +417,14 @@ class Simulator:
         """Deliver an Ethernet frame (no FCS) into the ENC28J60's RX buffer.
         Returns ENC_RX_OK or a negative ENC_RX_* code (filtered, overflow...)."""
         return self._capi.sim_enc28j60_inject_rx(self._handle, bytes(frame), len(frame))
+
+    def enc28j60_poke_buffer(self, address: int, value: int) -> int:
+        """Fault injection: corrupt a byte of the ENC RX buffer, so tests can
+        break the packet chain and check the driver recovers."""
+        return self._capi.sim_enc28j60_poke_buffer(self._handle, address, value)
+
+    def enc28j60_peek_buffer(self, address: int) -> int:
+        return self._capi.sim_enc28j60_peek_buffer(self._handle, address)
 
     def enc28j60_tx_count(self) -> int:
         return self._capi.sim_enc28j60_tx_count(self._handle)

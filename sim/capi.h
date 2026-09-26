@@ -180,6 +180,10 @@ extern "C"
     // buffer (returns 0 or a negative ENC28J60_RX_* code), and read back the
     // frames the firmware transmitted, oldest first.
     SIM_API int sim_enc28j60_inject_rx(sim_handle_t aSim, const unsigned char *aFrame, int aLen);
+    // Fault injection for tests: poke/peek the ENC28J60 receive buffer, so a
+    // test can corrupt the packet chain and exercise driver recovery.
+    SIM_API int sim_enc28j60_poke_buffer(sim_handle_t aSim, int aAddress, int aValue);
+    SIM_API int sim_enc28j60_peek_buffer(sim_handle_t aSim, int aAddress);
     SIM_API int sim_enc28j60_tx_count(sim_handle_t aSim);
     SIM_API int sim_enc28j60_tx_frame(sim_handle_t aSim, int aIndex, unsigned char *aOut, int aMax);
 

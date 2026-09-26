@@ -86,6 +86,10 @@ int enc28j60_inject_rx(enc28j60_t *aDev, const uint8_t *aFrame, int aLen);
 
 // Frames the firmware has transmitted (ECON1.TXRTS), oldest index 0.
 int enc28j60_tx_count(const enc28j60_t *aDev);
+
+/* Fault injection for tests (see enc28j60.c): poke/peek the receive buffer. */
+void enc28j60_poke_buffer(enc28j60_t *aDev, int aAddress, int aValue);
+int enc28j60_peek_buffer(const enc28j60_t *aDev, int aAddress);
 // Copies frame aIndex into aOut (up to aMax bytes); returns its full length,
 // or -1 if that index has aged out of the ENC28J60_TX_LOG ring.
 int enc28j60_tx_frame(const enc28j60_t *aDev, int aIndex, uint8_t *aOut, int aMax);

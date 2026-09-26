@@ -994,9 +994,105 @@ class Rung8Tcp(_Bound):
 
 # --- one concrete unittest class per (rung, target) --------------------------------
 
+# --- rung 3: sustained traffic and ring recovery ---------------------------------
+
+class Rung3Soak(_Base):
+    """The failure that only sustained traffic exposes.
+
+    On the bench the board answered for minutes and then stopped replying for
+    good: receive still enabled, frames still consumed, but nothing sent, and
+    only an MCU reset revived it. The post-mortem read EIR 0x09 (TXIF|RXERIF),
+    ESTAT 0x41 (CLKRDY|BUFER), PKTCNT 0.
+
+    The cause is the next-packet-pointer chain. enc_rx_begin() follows it
+    blindly; if a header is ever garbage, next_pkt becomes garbage and
+    enc_rx_done() writes ERXRDPT outside the ring. The hardware then derives
+    its free space from that pointer, believes the buffer is permanently full,
+    drops every frame (so EPKTCNT stays 0), and the driver's own
+    "EPKTCNT == 0 -> return" guard means it never looks again.
+
+    The model does not corrupt the chain by itself - its overflow drops the
+    frame and leaves the pointers alone, which is why plain soaking passes
+    even without the fix. Real silicon is reported to leave the buffer
+    inconsistent after an overflow. So the corruption is injected directly
+    (enc28j60_poke_buffer) to exercise the driver's recovery, which is the
+    part that has to work either way.
+    """
+    RUNG = 3
+
+    def mixed_frame(self, i):
+        if i % 4 == 0:
+            return eth(BCAST_MAC, PEER_MAC, 0x0806,
+                       arp(1, PEER_MAC, PEER_IP, b"\0" * 6, OUR_IP)), 1
+        if i % 4 == 1:
+            return eth(OUR_MAC, PEER_MAC, 0x0800,
+                       ipv4(PEER_IP, OUR_IP, 1,
+                            icmp_echo(0x77, i & 0xFFFF, bytes(range(32))))), 1
+        if i % 4 == 2:
+            return eth(OUR_MAC, PEER_MAC, 0x0800,
+                       ipv4(PEER_IP, OUR_IP, 17,
+                            udp(PEER_IP, OUR_IP, 40000, 7, b"soak%04d" % i))), 1
+        # a big broadcast the ENC accepts (BCEN, needed for ARP) and the stack
+        # must ignore: mDNS to a multicast IP that is not ours
+        body = udp(PEER_IP, bytes([224, 0, 0, 251]), 5353, 5353, b"\xAA" * 300)
+        return eth(BCAST_MAC, PEER_MAC, 0x0800,
+                   ipv4(PEER_IP, bytes([224, 0, 0, 251]), 17, body)), 0
+
+    def test_sustained_traffic_keeps_answering(self):
+        overflowed = False
+        for i in range(60):
+            frame, expect = self.mixed_frame(i)
+            if i % 4 == 3:
+                # Flood faster than the MCU drains, to force EIR.RXERIF and
+                # ESTAT.BUFER. The ring is 3 KB below rung 5 and each of these
+                # broadcasts needs ~352 B, so ~9 fill it; 16 is comfortably
+                # past that even when the ring starts empty.
+                for _ in range(16):
+                    if self.net.inject(frame) == Simulator.ENC_RX_OVERFLOW:
+                        overflowed = True
+                # let the firmware work through the backlog, or the frame we
+                # actually want answered would itself be dropped
+                self.net.settle()
+            self.net.inject(frame)
+            if expect:
+                self.assertEqual(len(self.net.expect_tx(expect, 4_000_000)), expect,
+                                 f"no reply at round {i}")
+        self.assertTrue(overflowed, "the burst never overflowed the ring")
+        # and the flags did not leave the ring wedged
+        rdpt = (self.net.sim.enc28j60_register(0, 0x0C) |
+                (self.net.sim.enc28j60_register(0, 0x0D) << 8))
+        self.assertLessEqual(rdpt, 0x0BFF, "ERXRDPT outside the RX ring")
+
+    def test_recovers_from_corrupted_packet_chain(self):
+        # one good exchange, so the ring is live
+        self.arp_request(OUR_IP)
+        self.check_arp_reply(*self.net.expect_tx())
+
+        wr = (self.net.sim.enc28j60_register(0, 0x0E) |
+              (self.net.sim.enc28j60_register(0, 0x0F) << 8))
+        self.arp_request(OUR_IP)
+        # break this packet's next-packet pointer, as silicon is reported to
+        # do after an overflow
+        self.net.sim.enc28j60_poke_buffer(wr, 0xFF)
+        self.net.sim.enc28j60_poke_buffer(wr + 1, 0x7F)
+        self.net.sim.step(3_000_000)
+        self.net.new_tx()
+
+        # without recovery ERXRDPT lands outside the ring and nothing is ever
+        # answered again
+        for _ in range(3):
+            self.arp_request(OUR_IP)
+            self.check_arp_reply(*self.net.expect_tx(1, 4_000_000))
+        rdpt = (self.net.sim.enc28j60_register(0, 0x0C) |
+                (self.net.sim.enc28j60_register(0, 0x0D) << 8))
+        self.assertLessEqual(rdpt, 0x0BFF, "ERXRDPT outside the RX ring")
+        self.assertEqual(self.net.sim.enc28j60_register(0, 0x1D) & 0x40, 0,
+                         "ESTAT.BUFER still set after recovery")
+
+
 def _instantiate():
     for target in TARGETS:
-        for cls in (Rung1Arp, Rung2Icmp, Rung3Udp, Rung4Dhcp,
+        for cls in (Rung1Arp, Rung2Icmp, Rung3Udp, Rung3Soak, Rung4Dhcp,
                     Rung5Mtu, Rung6Lease, Rung7Dns, Rung8Tcp):
             name = f"{cls.__name__}_{target}"
             concrete = type(name, (cls, unittest.TestCase),

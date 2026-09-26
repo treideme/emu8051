@@ -75,6 +75,10 @@ struct enc28j60
 #define EIR_TXIF 0x08
 #define EIR_RXERIF 0x01
 #define ESTAT_CLKRDY 0x01
+/* Datasheet 3.2.2: ESTAT.BUFER is set when a packet is received and
+   discarded for want of buffer space (also on an out-of-region buffer
+   access). It is sticky: hardware sets it, software must clear it. */
+#define ESTAT_BUFER 0x40
 #define ERXFCON_UCEN 0x80
 #define ERXFCON_ANDOR 0x40
 #define ERXFCON_BCEN 0x01
@@ -511,6 +515,7 @@ int enc28j60_inject_rx(enc28j60_t *aDev, const uint8_t *aFrame, int aLen)
     if ((uint16_t)(used + need) >= size)
     {
         dev->global_regs[REG_EIR - 0x1B] |= EIR_RXERIF;
+        dev->global_regs[REG_ESTAT - 0x1B] |= ESTAT_BUFER;
         return ENC28J60_RX_OVERFLOW;
     }
 
@@ -544,6 +549,25 @@ int enc28j60_inject_rx(enc28j60_t *aDev, const uint8_t *aFrame, int aLen)
         dev->banked_regs[1][B1_EPKTCNT]++;
     dev->global_regs[REG_EIR - 0x1B] |= EIR_PKTIF;
     return ENC28J60_RX_OK;
+}
+
+/* Fault injection for tests. NOT a model of any silicon behaviour: it lets a
+   test corrupt the receive buffer (e.g. the next-packet-pointer field of a
+   queued packet) so driver recovery paths can be exercised. Real silicon is
+   reported to leave the buffer inconsistent after an overflow, which this
+   model does not reproduce on its own. */
+void enc28j60_poke_buffer(enc28j60_t *aDev, int aAddress, int aValue)
+{
+    struct enc28j60 *dev = aDev;
+    if (aAddress >= 0 && aAddress < BUFFER_SIZE)
+        dev->buffer[aAddress] = (uint8_t)aValue;
+}
+
+int enc28j60_peek_buffer(const enc28j60_t *aDev, int aAddress)
+{
+    if (aAddress < 0 || aAddress >= BUFFER_SIZE)
+        return -1;
+    return aDev->buffer[aAddress];
 }
 
 int enc28j60_tx_count(const enc28j60_t *aDev)

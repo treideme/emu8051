@@ -625,6 +625,23 @@ int sim_enc28j60_inject_rx(sim_handle_t aSim, const unsigned char *aFrame, int a
     return enc28j60_inject_rx(s->enc28j60, aFrame, aLen);
 }
 
+int sim_enc28j60_poke_buffer(sim_handle_t aSim, int aAddress, int aValue)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return -1;
+    enc28j60_poke_buffer(s->enc28j60, aAddress, aValue);
+    return 0;
+}
+
+int sim_enc28j60_peek_buffer(sim_handle_t aSim, int aAddress)
+{
+    struct sim *s = (struct sim *)aSim;
+    if (!s->enc28j60)
+        return -1;
+    return enc28j60_peek_buffer(s->enc28j60, aAddress);
+}
+
 int sim_enc28j60_tx_count(sim_handle_t aSim)
 {
     struct sim *s = (struct sim *)aSim;
