@@ -6,7 +6,8 @@
  * Models the six ISP/IAP SFRs STC parts use to let firmware read, byte-program
  * and sector-erase on-chip flash, plus the ISP_CONTR software reset (SWRST) and
  * boot-select (SWBS) bits. Two families are covered, because they differ in
- * exactly the places a bootloader cares about:
+ * exactly the places a bootloader cares about, plus one more STC89-style part
+ * whose Data Flash sits elsewhere:
  *
  *   IAP_PROFILE_STC89C52RC  STC89C51RC/RD+ datasheet (EN-271) ch. 9:
  *                           SFRs E2h-E7h, trigger 46h then B9h, 512-byte
@@ -17,6 +18,18 @@
  *                           sector of the action, the statements will be
  *                           ignore" (p. 204). Data Flash is its own array; it
  *                           is not program memory and cannot be executed.
+ *
+ *   IAP_PROFILE_STC12C2052AD  The STC89 profile's SFRs, triggers and
+ *                           commands, with the Data Flash at IAP addresses
+ *                           0800h-17FFh (4 KB, eight sectors). Measured on a
+ *                           board with BSL 5.4D, not taken from the datasheet,
+ *                           whose 10 KB at 0000h-27FFh does not match the
+ *                           part: an EEPROM image written by the ISP host at
+ *                           ISP address 0800h + N read back through IAP at
+ *                           0800h + N, for N up to FFFh. Outside the range the
+ *                           part returned FFh below 0800h (or left the data
+ *                           SFR alone; it was preset to FFh) and 00h from
+ *                           1800h up; here both are ignored commands.
  *
  *   IAP_PROFILE_IAP15       STC15 datasheet ch. on IAP, p. 487: "The user
  *                           program can directly modify the user program area
@@ -51,6 +64,7 @@ typedef enum
 {
     IAP_PROFILE_STC89C52RC = 0,
     IAP_PROFILE_IAP15 = 1,
+    IAP_PROFILE_STC12C2052AD = 2,
 } iap_profile_t;
 
 typedef struct iap iap_t;
@@ -70,7 +84,8 @@ void iap_post_tick(iap_t *aIap);
 void iap_power_on(iap_t *aIap);
 
 // Host-side view of the flash the IAP commands act on (Data Flash for the
-// STC89 profile, code memory for IAP15). Returns -1 outside it.
+// STC89 and STC12C2052AD profiles, code memory for IAP15). Returns -1
+// outside it.
 int iap_peek(iap_t *aIap, int aAddress);
 int iap_poke(iap_t *aIap, int aAddress, int aValue); // test setup only
 

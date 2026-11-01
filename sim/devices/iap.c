@@ -22,14 +22,16 @@ static const profile_t PROFILES[] = {
     // Upper bound 0xF400 mirrors the STC89 RD+ tables' F3FFh ceiling; the
     // bootloader itself decides what it refuses to touch.
     {0xC2, 0x5A, 0xA5, 1, 0x0000, 0xF400},
+    // STC12C2052AD: STC89 registers, Data Flash 0800h-17FFh (see iap.h).
+    {0xE2, 0x46, 0xB9, 0, 0x0800, 0x1800},
 };
 
 struct iap
 {
     struct em8051 *cpu;
     profile_t p;
-    uint8_t *flash;       // data flash (STC89) or == cpu->mCodeMem (IAP15)
-    uint8_t *own_flash;   // allocated only for the STC89 profile
+    uint8_t *flash;       // data flash (STC89, STC12C2052AD) or == cpu->mCodeMem (IAP15)
+    uint8_t *own_flash;   // allocated only for the data-flash profiles
     uint8_t last_trig;
     int pending_reset;    // 0 none, 1 = to AP, 2 = to ISP monitor
     uint8_t keep_contr;   // ISPEN|SWBS survive a software reset
@@ -130,7 +132,9 @@ iap_t *iap_create(sim_bus_t *aBus, struct em8051 *aCPU, iap_profile_t aProfile)
     if (!d)
         return NULL;
     d->cpu = aCPU;
-    d->p = PROFILES[aProfile == IAP_PROFILE_IAP15 ? 1 : 0];
+    // Anything unknown falls back to the STC89 profile, as before.
+    d->p = PROFILES[(aProfile == IAP_PROFILE_IAP15 || aProfile == IAP_PROFILE_STC12C2052AD)
+                        ? aProfile : IAP_PROFILE_STC89C52RC];
 
     // Erased flash reads FFh; the simulator's code array starts zeroed.
     memset(aCPU->mCodeMem, 0xFF, (size_t)aCPU->mCodeMemMaxIdx + 1);

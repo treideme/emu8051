@@ -357,6 +357,7 @@ class Simulator:
     # --- STC ISP/IAP flash programming (sim/devices/iap.h) -------------
     IAP_STC89C52RC = 0  # E2h-E7h, 46h/B9h, Data Flash 2000h-2FFFh only
     IAP_IAP15 = 1       # C2h-C7h, 5Ah/A5h, program memory writable
+    IAP_STC12C2052AD = 2  # E2h-E7h, 46h/B9h, Data Flash 0800h-17FFh (measured)
     IAP_STATS = ("reads", "programs", "erases", "ignored", "soft_resets", "isp_entries")
 
     def enable_iap(self, profile: int) -> None:
