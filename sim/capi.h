@@ -52,8 +52,8 @@ extern "C"
     // Resets the CPU (registers/PC/SFRs back to power-on state) and
     // anything that's purely a *reflection* of what the CPU has driven
     // onto pins (the digit display's captured segments, the LCD's DDRAM/
-    // cursor state) -- both re-created fresh so they don't show stale
-    // pre-reset content. Also zeros the instruction/tick/UART-TX counters
+    // cursor state) -- both back to their state when enabled, so they
+    // don't show stale pre-reset content. Also zeros the instruction/tick/UART-TX counters
     // and the exception log, so a caller can treat this as "start this
     // run over". Does NOT touch DS1302 (a real one is battery-backed and
     // keeps running across an MCU reset), XPT2046 (its reading is

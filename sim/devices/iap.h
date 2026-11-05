@@ -75,6 +75,14 @@ typedef struct iap iap_t;
 iap_t *iap_create(sim_bus_t *aBus, struct em8051 *aCPU, iap_profile_t aProfile);
 void iap_destroy(iap_t *aIap);
 
+// Who resets the CPU when the firmware sets SWRST: aFn(aUser), which must
+// do what the core's reset(cpu, 0) does (a plugin passes its host's
+// reset_cpu, plugin.h). The model does not call into the core itself, so
+// that it links into a plugin. Without one, SWRST is counted and ISPEN/SWBS
+// are kept, but the CPU runs on.
+typedef void (*iap_reset_fn)(void *aUser);
+void iap_set_reset(iap_t *aIap, iap_reset_fn aFn, void *aUser);
+
 // Call once per tick, after the instruction completes: performs a software
 // reset requested by writing SWRST, outside the SFR-write callback (resetting
 // mid-instruction would let that instruction's own PC update run after it).

@@ -34,6 +34,11 @@ typedef struct digit_display digit_display_t;
 digit_display_t *digit_display_create(sim_bus_t *aBus, struct em8051 *aCPU, digit_display_pins_t aPins);
 void digit_display_destroy(digit_display_t *aDev);
 
+// Back to the state digit_display_create() leaves it in: no digit seen
+// yet, the latch sampled from aCPU's pins as they are now. Subscriptions
+// stay.
+void digit_display_reset(digit_display_t *aDev, const struct em8051 *aCPU);
+
 // Last-seen raw segment byte (dp-g-f-e-d-c-b-a, matching this project's
 // segment_map/ledteble tables) latched for physical position aDigit
 // (0 .. digit_count-1). Never reset between reads -- this is a "last

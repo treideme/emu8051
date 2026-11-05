@@ -95,7 +95,6 @@ struct sim
     unsigned long clock_hz;
 
     digit_display_t *digit_display;
-    int digit_count; // remembered so sim_reset() can recreate it identically
     hd44780_t *lcd;
     ds1302_t *ds1302;
     xpt2046_t *xpt2046;

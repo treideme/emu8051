@@ -45,6 +45,10 @@ typedef struct hc573 hc573_t;
 hc573_t *hc573_create(sim_bus_t *aBus, struct em8051 *aCPU, hc573_pins_t aPins);
 void hc573_destroy(hc573_t *aDev);
 
+// Back to the state hc573_create() leaves it in: LE and the outputs
+// sampled from aCPU's pins as they are now. Subscriptions stay.
+void hc573_reset(hc573_t *aDev, const struct em8051 *aCPU);
+
 // Currently latched (or, while LE=1, currently passed-through) Q0..Q7.
 uint8_t hc573_get_output(const hc573_t *aDev);
 

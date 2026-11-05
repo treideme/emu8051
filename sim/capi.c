@@ -190,10 +190,9 @@ void sim_reset(sim_handle_t aSim)
 {
     struct sim *s = (struct sim *)aSim;
 
-    // CPU first: the digit-display/LCD recreate below reads pin/port state
-    // at construction time (see hc573_create()), and that read needs to see
-    // the *post*-reset power-on port state, not whatever was there a moment
-    // ago.
+    // CPU first: the digit-display/LCD reset below samples pin/port state
+    // (see hc573_reset()), and that read needs to see the *post*-reset
+    // power-on port state, not whatever was there a moment ago.
     sim_cpu_reset(s, 0);
     if (s->iap)
         iap_power_on(s->iap); // host reset = power cycle: ISPEN/SWBS clear
@@ -211,23 +210,18 @@ void sim_reset(sim_handle_t aSim)
     s->total_clocks = 0;
     s->device_clocks = 0;
 
-    // Recreated fresh so they don't keep showing whatever they last
-    // captured from the CPU before reset -- these are pure reflections of
-    // CPU port writes, not independent state. DS1302/XPT2046/sim_set_pin
-    // stimulus are deliberately left alone; see sim_reset()'s own comment
-    // in capi.h for why.
+    // Back to their state when enabled, so they don't keep showing whatever
+    // they last captured from the CPU before reset -- these are pure
+    // reflections of CPU port writes, not independent state. Reset in place:
+    // their bus subscriptions stay. (Destroying and recreating them left the
+    // old subscriptions on the bus, calling into freed memory, and added a
+    // set per reset until bus_on_write's assertion fired.) DS1302/XPT2046/
+    // sim_set_pin stimulus are deliberately left alone; see sim_reset()'s
+    // own comment in capi.h for why.
     if (s->digit_display)
-    {
-        digit_display_destroy(s->digit_display);
-        s->digit_display = NULL;
-        sim_enable_digit_display(aSim, s->digit_count);
-    }
+        digit_display_reset(s->digit_display, &s->cpu);
     if (s->lcd)
-    {
-        hd44780_destroy(s->lcd);
-        s->lcd = NULL;
-        sim_enable_lcd(aSim);
-    }
+        hd44780_reset(s->lcd, s->clock_hz);
 
     plugin_reset_all(s);
     notify_all_pins(s);
@@ -435,7 +429,6 @@ int sim_enable_digit_display(sim_handle_t aSim, int aDigitCount)
     pins.select = HC6800_ES_SEG_SELECT;
     pins.digit_count = aDigitCount;
     s->digit_display = digit_display_create(s->bus, &s->cpu, pins);
-    s->digit_count = aDigitCount;
     return 0;
 }
 
@@ -719,13 +712,23 @@ void sim_uart_inject_rx(sim_handle_t aSim, unsigned char aByte)
         s->cpu.serial_interrupt_trigger = 1;
 }
 
+// SWRST: the IAP model asks for the core's reset(); sim_cpu_reset() also
+// puts back the plugins' opcodes.
+static void iap_reset_cpu(void *aSim)
+{
+    sim_cpu_reset((struct sim *)aSim, 0);
+}
+
 int sim_enable_iap(sim_handle_t aSim, int aProfile)
 {
     struct sim *s = (struct sim *)aSim;
     if (!s)
         return -1;
     if (!s->iap)
+    {
         s->iap = iap_create(s->bus, &s->cpu, (iap_profile_t)aProfile);
+        iap_set_reset(s->iap, iap_reset_cpu, s);
+    }
     return s->iap ? 0 : -1;
 }
 

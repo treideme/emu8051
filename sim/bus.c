@@ -23,7 +23,12 @@ typedef struct
 
 struct sim_bus
 {
-    struct em8051 *cpu;
+    struct em8051 *cpu; // NULL for a forwarding bus
+    // A forwarding bus (bus_create_forwarding) keeps no subscribers of its
+    // own: each subscription goes straight to these.
+    void *fwd_sim;
+    bus_subscribe_write_fn fwd_write;
+    bus_subscribe_read_fn fwd_read;
     write_sub_t writes[SIM_NUM_REGS][SIM_MAX_SUBS_PER_REG];
     uint8_t write_count[SIM_NUM_REGS];
     read_sub_t reads[SIM_NUM_REGS][SIM_MAX_SUBS_PER_REG];
@@ -124,11 +129,30 @@ sim_bus_t *bus_create(struct em8051 *aCPU)
     return bus;
 }
 
+sim_bus_t *bus_create_forwarding(void *aSim, bus_subscribe_write_fn aOnWrite, bus_subscribe_read_fn aOnRead)
+{
+    sim_bus_t *bus;
+    if (!aOnWrite || !aOnRead)
+        return NULL;
+    bus = calloc(1, sizeof(sim_bus_t));
+    if (!bus)
+        return NULL;
+    bus->fwd_sim = aSim;
+    bus->fwd_write = aOnWrite;
+    bus->fwd_read = aOnRead;
+    return bus;
+}
+
 void bus_destroy(sim_bus_t *aBus)
 {
     int i, live = 0;
     if (!aBus)
         return;
+    if (!aBus->cpu)
+    {
+        free(aBus); // forwarding: never in the registry
+        return;
+    }
     if (g_last == aBus)
         g_last = NULL;
     for (i = 0; i < g_registry_cap; i++)
@@ -149,7 +173,13 @@ void bus_destroy(sim_bus_t *aBus)
 
 void bus_on_write(sim_bus_t *aBus, uint8_t aReg, bus_write_fn aFn, void *aUserData)
 {
-    uint8_t n = aBus->write_count[aReg];
+    uint8_t n;
+    if (aBus->fwd_write)
+    {
+        aBus->fwd_write(aBus->fwd_sim, aReg, aFn, aUserData);
+        return;
+    }
+    n = aBus->write_count[aReg];
     assert(n < SIM_MAX_SUBS_PER_REG && "bus_on_write: raise SIM_MAX_SUBS_PER_REG");
     aBus->writes[aReg][n].fn = aFn;
     aBus->writes[aReg][n].userdata = aUserData;
@@ -159,7 +189,13 @@ void bus_on_write(sim_bus_t *aBus, uint8_t aReg, bus_write_fn aFn, void *aUserDa
 
 void bus_on_read(sim_bus_t *aBus, uint8_t aReg, bus_read_fn aFn, void *aUserData)
 {
-    uint8_t n = aBus->read_count[aReg];
+    uint8_t n;
+    if (aBus->fwd_read)
+    {
+        aBus->fwd_read(aBus->fwd_sim, aReg, aFn, aUserData);
+        return;
+    }
+    n = aBus->read_count[aReg];
     assert(n < SIM_MAX_SUBS_PER_REG && "bus_on_read: raise SIM_MAX_SUBS_PER_REG");
     aBus->reads[aReg][n].fn = aFn;
     aBus->reads[aReg][n].userdata = aUserData;

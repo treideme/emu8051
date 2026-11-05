@@ -50,6 +50,12 @@ static void on_le_write(struct em8051 *aCPU, uint8_t aReg, uint8_t aValue, void 
     }
 }
 
+void hc573_reset(hc573_t *aDev, const struct em8051 *aCPU)
+{
+    aDev->transparent = pin_get(aCPU, aDev->pins.le); // see hc573_create()
+    aDev->output = read_data_bus(aDev, aCPU);
+}
+
 hc573_t *hc573_create(sim_bus_t *aBus, struct em8051 *aCPU, hc573_pins_t aPins)
 {
     hc573_t *dev = (hc573_t *)calloc(1, sizeof(hc573_t));
