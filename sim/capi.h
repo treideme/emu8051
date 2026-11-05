@@ -44,10 +44,12 @@ extern "C"
 {
 #endif
 
-    // aBoardName selects a sim/boards/* pinout catalog. Currently only
-    // "hc6800_es" exists; add more as new dev-kits show up. "bare" is a
-    // plain 8051 (64 KB code and xdata, 256 bytes idata) with no board,
-    // for a plugin (sim_load_plugin) to build a part on.
+    // aBoardName selects a board. "hc6800_es" is a plain 8051 (64 KB code
+    // and xdata, 256 bytes idata, 12 MHz) with the HC6800-ES board plugin
+    // added (sim/boards/hc6800_es_plugin.h, linked into this library): its
+    // devices are what the sim_enable_* functions below attach. "bare" is
+    // the same 8051 with no board, for a plugin (sim_load_plugin) to build
+    // a part on. NULL for any other name.
     SIM_API sim_handle_t sim_open(const char *aBoardName);
     SIM_API void sim_close(sim_handle_t aSim);
 
@@ -57,8 +59,8 @@ extern "C"
     // Resets the CPU (registers/PC/SFRs back to power-on state) and
     // anything that's purely a *reflection* of what the CPU has driven
     // onto pins (the digit display's captured segments, the LCD's DDRAM/
-    // cursor state) -- both back to their state when enabled, so they
-    // don't show stale pre-reset content. Also zeros the instruction/tick/UART-TX counters
+    // cursor state) -- both back to their state when enabled, so they don't
+    // show stale pre-reset content -- and calls every plugin's reset. Also zeros the instruction/tick/UART-TX counters
     // and the exception log, so a caller can treat this as "start this
     // run over". Does NOT touch DS1302 (a real one is battery-backed and
     // keeps running across an MCU reset), XPT2046 (its reading is
@@ -144,6 +146,14 @@ extern "C"
     // sim_enable_*() call (idempotent -- calling again is a no-op) and
     // wired to whatever pins aBoardName's catalog says. Query/stimulus
     // functions for a peripheral that was never enabled return 0/empty.
+    //
+    // They are the board plugin's (sim/boards/hc6800_es_plugin.h): every
+    // sim_enable_* function and every device query and stimulus function
+    // here, the IAP ones included, calls the method of the same name
+    // without "sim_" of the plugin named "hc6800_es". When the simulation
+    // has none ("bare"), the first such call adds the linked-in one, so
+    // they work there too. A plugin of that name loaded from a shared
+    // object answers them in its place.
 
     SIM_API int sim_enable_digit_display(sim_handle_t aSim, int aDigitCount);
     SIM_API int sim_digit_get_segments(sim_handle_t aSim, int aDigit);

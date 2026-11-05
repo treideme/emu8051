@@ -1,8 +1,9 @@
 /* sim_private.h - the simulation object behind capi.h's handle
  * Copyright 2025 Thomas Reidemeister, MIT License (see devices/hc573.h)
  *
- * Shared by capi.c (the flat API and the board's devices) and plugin.c
- * (the plugin host, see plugin.h). Not installed, not part of any ABI: a
+ * Shared by capi.c (the flat API) and plugin.c (the plugin host, see
+ * plugin.h). The boards' devices are not here: a board is a plugin
+ * (sim/boards/hc6800_es_plugin.c). Not installed, not part of any ABI: a
  * plugin sees emu8051_host_t, never this struct.
  */
 #ifndef SIM_PRIVATE_H
@@ -11,14 +12,6 @@
 #include "capi.h"
 #include "bus.h"
 #include "plugin.h"
-#include "devices/digit_display.h"
-#include "devices/hd44780.h"
-#include "devices/ds1302.h"
-#include "devices/xpt2046.h"
-#include "devices/servo.h"
-#include "devices/enc28j60.h"
-#include "devices/fan.h"
-#include "devices/iap.h"
 
 #define MAX_EXCEPTIONS 64
 #define MAX_STIM 64
@@ -96,18 +89,8 @@ struct sim
                         // struct em8051* straight back to struct sim*
                         // instead of needing a second cpu->sim registry.
     sim_bus_t *bus;
-    int board;          // SIM_BOARD_*
 
     unsigned long clock_hz;
-
-    digit_display_t *digit_display;
-    hd44780_t *lcd;
-    ds1302_t *ds1302;
-    xpt2046_t *xpt2046;
-    servo_t *servo; // external peripheral, not board-catalog: see capi.h
-    enc28j60_t *enc28j60;
-    fan_t *fan;
-    iap_t *iap; // flash-programming SFRs, see devices/iap.h
 
     int exceptions[MAX_EXCEPTIONS];
     int exception_count;
@@ -153,12 +136,6 @@ struct sim
     uint8_t pin_reg_watched[128];
     tick_hook_t tick_hooks[MAX_PLUGIN_HOOKS];
     int tick_hook_count;
-};
-
-enum
-{
-    SIM_BOARD_HC6800_ES = 0,
-    SIM_BOARD_BARE = 1,
 };
 
 // capi.c
