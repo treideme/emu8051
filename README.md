@@ -4,18 +4,35 @@ background to these modifications to the original simulator.
 The `sim` branch
 ================
 
-⚠️ **`sim` goes well beyond Jari's original scope, and it is a highly
-experimental effort of my own.** The upstream project is an 8051/8052 CPU
-emulator with a curses UI; `sim` adds a peripheral-simulation layer around it —
-device models (HD44780, DS1302, XPT2046, 7-segment displays, servo, ENC28J60,
-fan), a flat C API, Python `ctypes` bindings, a PySide6 live view, and a test
-suite that runs against a sibling repository's compiled demo projects.
+`sim` is a freestanding 8051 simulator for the desktop, on Linux and
+Windows, built on this emulator's CPU core. It goes well beyond extending
+the original, which is an 8051/8052 CPU emulator with a curses UI. On top
+of the core, `sim` has:
 
-None of that is upstream's responsibility or its design intent, and it should
-not be read as a criticism of the original where it diverges. **The defect fixes
-on this branch are separate and do apply upstream** — they are listed below and
-are kept as clean patches against upstream's head precisely so the two can be
-told apart.
+- a peripheral layer: a bus that lets any number of models share an SFR,
+  and pins passed to models as values;
+- device models: an HD44780 LCD, a seven-segment display behind a 74HC573
+  latch and a 74HC138 decoder, a DS1302 clock, an XPT2046 ADC, a servo, an
+  ENC28J60 Ethernet controller, a fan, and STC's flash programming (IAP);
+- plugins: a versioned table of host functions through which a shared
+  object, or code linked into a program, adds models, a board, or a
+  different part with its own timing and interrupts;
+- a flat C API (`sim/capi.h`) that any language can bind;
+- Python bindings over it (`ctypes`, no dependencies) and a PySide6 live
+  view;
+- tests in C and Python, the Python ones also run against compiled demo
+  programs.
+
+The HC6800-ES development board is itself a plugin.
+[`sim/PLUGIN-TUTORIAL.md`](sim/PLUGIN-TUTORIAL.md) uses it as the worked
+example for writing a board plugin, and [`sim/README.md`](sim/README.md)
+describes the rest.
+
+`sim` is my own work and experimental. None of it is upstream's
+responsibility or design intent, and where it differs from the original it
+is not a criticism of it. **The defect fixes on this branch are separate
+and do apply upstream.** They are listed below and kept as clean patches
+against upstream's head, so the two can be told apart.
 
 Maintained fork
 ===============

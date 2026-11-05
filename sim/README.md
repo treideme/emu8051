@@ -29,13 +29,19 @@ sim/devices/*.c                  <- peripheral models, written only in terms of
 sim/boards/hc6800_es.c           <- THIS project's pin_t/xxx_pins_t catalog for
                                      the one dev-kit this repo targets --
                                      real board peripherals only
+sim/boards/hc6800_es_plugin.c    <- the HC6800-ES board as a plugin: creates
+                                     the device models on the catalog's pins
+                                     when asked, steps them, and answers
+                                     methods. Linked into the library, and
+                                     also built on its own as
+                                     build/hc6800_es.so (see PLUGIN-TUTORIAL.md)
 sim/capi.h, capi.c               <- flat C API (opaque handle, plain functions)
-                                     that ties board+devices+CPU together for
-                                     any external caller
-sim/plugin.h, plugin.c           <- the host side of loadable plugins: shared
-                                     objects built outside this repository
-                                     that add models, or a whole part, at run
-                                     time (see "Loadable plugins" below)
+                                     for any external caller; its sim_enable_*
+                                     and device functions call the board plugin
+sim/plugin.h, plugin.c           <- the host side of plugins: shared objects
+                                     opened at run time, or code linked into
+                                     the program, that add models, a board, or
+                                     a whole part (see "Loadable plugins" below)
 python/pysim/                    <- ctypes wrapper over capi.h
 python/sim_gui.py                <- PySide6 live view (polls sim_step(), no
                                      callback/threading machinery)
@@ -43,9 +49,15 @@ python/tests/                    <- unittest suite: test_hc6800_es.py (board
                                      peripherals) and test_external_peripherals.py
                                      (servo/enc28j60), both run against real
                                      compiled .hex files from a sibling demo repo;
-                                     test_plugin.py, against tests/plugin/
+                                     test_plugin.py, against tests/plugin/;
+                                     test_hc6800_plugin.py, the board linked in
+                                     against the board loaded as a shared object
 tests/plugin/demo_plugin.c       <- a small plugin that uses every part of
                                      plugin.h once, for test_plugin.py
+tests/test_hc6800_plugin.c       <- the same comparison in C: the board from
+                                     sim_open(), from sim_add_plugin() and from
+                                     sim_load_plugin(); also built with no
+                                     dynamic loader (SIM_NO_DLOPEN)
 ```
 
 ## Python setup
@@ -69,9 +81,13 @@ uv pip install -r requirements.txt
 
 `sim_reset()`/`Simulator.reset()` resets the CPU (registers/PC/SFRs back to
 power-on state) and anything that's purely a *reflection* of what the CPU
-drove onto pins -- the digit display and LCD are destroyed and recreated
-fresh so they don't keep showing a stale pre-reset capture, the same class
-of bug `hc573_create()` had (above). It deliberately leaves DS1302,
+drove onto pins: the digit display and the LCD go back to their state when
+enabled, so they don't keep showing a stale pre-reset capture, the same
+class of bug `hc573_create()` had (below). The board plugin does this in
+place, with `digit_display_reset()` and `hd44780_reset()`. `sim_reset()`
+used to destroy and recreate both, which left the old ones' bus
+subscriptions behind, pointing at freed memory, until the seventh reset
+tripped the bus's subscriber limit. A reset deliberately leaves DS1302,
 XPT2046, and any `sim_set_pin()` overrides alone: a real DS1302 is
 battery-backed and keeps running across an MCU reset, and an XPT2046
 reading or a forced pin is host-injected test stimulus, not CPU-derived
@@ -92,7 +108,7 @@ effectively unthrottled -- fine for tests, but a DS1302 demo's seconds
 display would otherwise blow past a full minute in well under a second of
 wall-clock time.
 
-`hc6800_es`'s stock clock is a hardcoded 12MHz (`HC6800_ES_XTAL_HZ`), but
+`sim_open()` starts every simulation at 12MHz, the HC6800-ES crystal, but
 `sim_set_clock_hz()`/`Simulator.set_clock_hz()`/`sim_gui.py --clock-hz HZ`
 (or `sim_test`'s `clock_hz=N`) override it for a different real part --
 still assumed 12-clocks-per-machine-cycle, just a different oscillator.
@@ -101,8 +117,8 @@ Call it right after opening, before any `sim_enable_*()`/`enable_*()`:
 setting it later only affects a peripheral enabled afterwards.
 
 That matters because DS1302 now keeps its own free-running clock:
-`ds1302_step()` (called once per tick from `capi.c`'s `post_tick()`, same
-convention as `hd44780_step()`) rolls the 8 BCD registers forward by
+`ds1302_step()` (called once per tick from the board plugin's tick hook,
+same convention as `hd44780_step()`) rolls the 8 BCD registers forward by
 whatever the same `clock_hz/12` conversion says is one real second,
 including minute/hour/date/month/year carry and leap years -- a real
 DS1302 does this off its own 32.768kHz crystal, independent of the host
@@ -143,28 +159,46 @@ byte).
    `foo_create(bus, cpu, pins)`/`foo_destroy()` pair, and whatever
    query/stimulus functions make sense (see `ds1302.h`'s
    `ds1302_set_time()`/`ds1302_get_register()` for the shape of this).
+   If a CPU reset should put it back, add a `foo_reset()` that does so in
+   place: a model is never created twice, because its bus subscriptions
+   cannot be removed. If it counts time, add a `foo_step()` to call once
+   per tick.
 2. Subscribe to whichever registers your pins land in via `bus_on_write`/
    `bus_on_read` inside `foo_create()`. Don't assume you own the whole
    register.
-3. Expose it through `sim/capi.h`/`capi.c` (`sim_enable_foo()` +
-   query/stimulus functions) if you want it reachable from Python/the GUI.
-   If it's a real board peripheral, `sim_enable_foo()` takes no pin
-   arguments and reaches into `sim/boards/*`'s catalog, like
-   `sim_enable_lcd()` does. If it's an external plugin with no board
-   wiring to reach for, `sim_enable_foo()` takes the pin(s) as explicit
-   `(port, bit)` arguments instead, like `sim_enable_servo()`/
-   `sim_enable_enc28j60()` do -- see "Board peripherals vs external
-   peripheral plugins" below for which one applies and why.
+3. Give the board plugin (`sim/boards/hc6800_es_plugin.c`) an `enable_foo`
+   method that creates it, with a tick hook if it has a `foo_step()`, and
+   methods for its queries and stimulus. Then add `sim_enable_foo()` and
+   the rest to `sim/capi.h`/`capi.c` as calls of those methods if you want
+   it reachable from Python/the GUI. If it's a real board peripheral,
+   `enable_foo` takes no pin arguments and reaches into `sim/boards/*`'s
+   catalog, like `enable_lcd` does. If it's an external part with no board
+   wiring to reach for, it takes the pin(s) as explicit `(port, bit)`
+   arguments, like `enable_servo`/`enable_enc28j60` do. See "Board
+   peripherals vs external peripheral plugins" below for which one applies
+   and why.
+
+A part that only one project needs can also go into a plugin of its own,
+outside this repository (see "Loadable plugins" below).
 
 ## Adding a board
 
-Add `sim/boards/some_other_kit.h`/`.c` with its own `pin_t`/`xxx_pins_t`
-constants (see `hc6800_es.c` -- it's a flat catalog, not a "create
-everything" function, since real boards don't populate every peripheral
-at once). Every existing device model works against it unchanged. Wiring
-a new board into `capi.c`'s `sim_open()` board-name dispatch is the one
-place that currently assumes `hc6800_es` is the only option (flagged
-explicitly in that function).
+A board is a plugin. It has two parts: a pin catalog,
+`sim/boards/some_other_kit.h`/`.c`, with its own `pin_t`/`xxx_pins_t`
+constants, and a plugin that creates device models on those pins when a
+method asks for one, steps them and answers queries. The catalog is flat
+data like `hc6800_es.c`, with no "create everything" function, since real
+boards don't populate every peripheral at once. Every existing device model
+works against it unchanged.
+
+[`PLUGIN-TUTORIAL.md`](PLUGIN-TUTORIAL.md) writes one step by step, with
+`hc6800_es_plugin.c` as the worked example. For `sim_open("some_other_kit")`
+to give the new board, add a line to the `BOARDS` table in `capi.c`. A board
+kept in another repository goes onto `sim_open("bare")`, loaded with
+`sim_load_plugin()` or linked in and added with `sim_add_plugin()`. The
+`sim_enable_*` functions in `capi.h` are the HC6800-ES board's methods;
+another board's methods are reached with `sim_plugin_call()`, or pysim's
+`Plugin.call()`.
 
 ## Board peripherals vs external peripheral plugins
 
@@ -174,10 +208,11 @@ device model's own code:
 
 - **Board peripherals** (HD44780, 74HC573/74HC138, DS1302, XPT2046) are
   wired to specific pins on a *real* HC6800-ES board. Their pins live as
-  named constants in `sim/boards/hc6800_es.c`, and `capi.c`'s
-  `sim_enable_lcd()`/`sim_enable_ds1302()`/etc take no pin arguments at
-  all -- they just reach into that one board's catalog, because on this
-  board there's only one legitimate answer to "which pins is the LCD on".
+  named constants in `sim/boards/hc6800_es.c`, and
+  `sim_enable_lcd()`/`sim_enable_ds1302()`/etc (the board plugin's
+  `enable_lcd`/`enable_ds1302` methods) take no pin arguments at all. They
+  reach into that one board's catalog, because on this board there's only
+  one legitimate answer to "which pins is the LCD on".
 - **External peripheral plugins** (the servo, the ENC28J60, the fan) are
   *not* on the real board at all -- there's no servo header, no Ethernet
   module, and no fan header on an HC6800-ES. A project that wants one has
@@ -187,9 +222,10 @@ device model's own code:
   Because that pin choice is a per-project invention rather than a board
   fact, it does not belong in `sim/boards/hc6800_es.c` -- baking a
   made-up pin into the board catalog would make it look like a real
-  HC6800-ES fact to the next reader. Instead, `capi.c`'s
-  `sim_enable_servo()`/`sim_enable_enc28j60()`/`sim_enable_fan()` take the
-  pin(s) as explicit `(port, bit)` arguments (`sim_gui.py
+  HC6800-ES fact to the next reader. Instead,
+  `sim_enable_servo()`/`sim_enable_enc28j60()`/`sim_enable_fan()` (and the
+  plugin methods behind them) take the pin(s) as explicit `(port, bit)`
+  arguments (`sim_gui.py
   --servo`/`--enc28j60`/`--fan` mirror this), and the *caller* -- a
   project's own test, or whoever points the GUI at that project's `.hex`
   -- is the one who knows what pin that particular project assumed.
@@ -203,18 +239,26 @@ each wire it to their own pin.
 
 ## Loadable plugins (`plugin.h`)
 
-The device models above are compiled into this library. A model that does
-not belong here (another vendor's part, with its own core timing,
-interrupt controller and peripheral set, or a peripheral only one project
-needs) can instead live in its own repository as a *plugin*: a shared
-object that this library opens by path at run time. The plugin builds
-against these headers (no link against this library; everything goes
-through a table of host functions), and this repository does not change
-for it.
+A *plugin* adds models, a board or a whole part to a simulation, and it
+reaches the simulation through a table of host functions and nothing else.
+The HC6800-ES board is one: `sim/boards/hc6800_es_plugin.c` is linked into
+this library, where `sim_open("hc6800_es")` adds it, and the same source
+is built on its own as `build/hc6800_es.so`.
+
+A model that does not belong here (another vendor's part, with its own
+core timing, interrupt controller and peripheral set, or a peripheral only
+one project needs) can live in its own repository as a plugin: a shared
+object that this library opens by path at run time, or sources linked into
+a program and added with `sim_add_plugin()`. The plugin builds against
+these headers (no link against this library; everything goes through the
+table), and this repository does not change for it.
+[`PLUGIN-TUTORIAL.md`](PLUGIN-TUTORIAL.md) writes one step by step, with
+the HC6800-ES board as the worked example.
 
 ```
 sim_handle_t s = sim_open("bare");            // or "hc6800_es"
 sim_load_plugin(s, "path/to/plugin.so", "args the plugin understands");
+sim_add_plugin(s, its_init_function, "args"); // the same, linked in
 sim_plugin_call(s, "name", "method", in, nin, out, cap, &nout);
 ```
 
@@ -265,22 +309,27 @@ What the table offers, by group (`plugin.h` documents each):
   when a pin's level changes.
 - Plugins: calling a method of another plugin on the same simulation;
   reporting why init failed.
+- Ticks (added after ABI 1 was fixed, so check with `EMU8051_HOST_HAS`):
+  a function called once per tick of 12 clocks in both modes, for models
+  that count time in machine cycles. The board plugin steps its LCD,
+  DS1302, servo, fan and IAP models from these.
 
 **Two execution modes.** Without plugins, or with plugins that only use
-SFRs, xdata, pins and the `end` hook, the host runs `tick()` as before:
-12 clocks per machine cycle, the core's timers, UART and two-level
-interrupt controller. A plugin that sets a cycle table, a `begin`,
+SFRs, xdata, pins, tick hooks and the `end` hook, the host runs `tick()`
+as before: 12 clocks per machine cycle, the core's timers, UART and
+two-level interrupt controller. A plugin that sets a cycle table, a `begin`,
 `before` or `after` hook, or an interrupt hook switches the simulation
 to *instruction mode*: each step is a wait (a `begin` hook consumed it),
 an interrupt entry or one instruction, timed by the cycle table (12
 clocks per machine cycle without one). The core's timers, UART,
 interrupt controller and PCON idle and power-down do not run in that
 mode; they belong to `tick()`, and a part described by a plugin has its
-own. `sim_step(ticks)` still counts 12 clocks per tick, and the board's
-devices (those `sim_post_tick()` steps: the LCD, DS1302, servo, fan and
-IAP) are stepped once per 12 clocks executed, however the instructions
-are timed, so they keep their timing. RETI
-is the core's and only pops the PC: a plugin that tracks priority levels
+own. `sim_step(ticks)` still counts 12 clocks per tick, and tick hooks
+(the board's LCD, DS1302, servo, fan and IAP models among them) run once
+per 12 clocks executed, however the instructions are timed, so those
+models keep their timing. A tick hook leaves the host in its plain
+`tick()` loop; any step hook moves it to a slower one. RETI is the core's
+and only pops the PC: a plugin that tracks priority levels
 in service watches for opcode 32h in its `after` hook. A conditional
 jump to the very next instruction lands in the same place whether it
 jumps or not; for the taken column the host runs such a jump with its
@@ -288,7 +337,9 @@ offset patched to 1 and puts the byte back.
 
 **Methods.** `sim_plugin_call()` passes bytes in and bytes out, with a
 method name, so a binding needs nothing per plugin; each plugin documents
-its own methods. A binding that wants typed functions can open the same
+its own methods. The board's are listed in `sim/boards/hc6800_es_plugin.h`,
+and `capi.h`'s device functions are calls of them. A binding that wants
+typed functions can open the same
 object (`sim_plugin_path()`, already loaded) and call what the plugin
 exports, passing `sim_plugin_context()` first; pysim's
 `Plugin.function()` does that.
@@ -303,12 +354,26 @@ xdata ranges, 64 watched pins, 64 driven pins.
 
 **Building one.** Compile with the repository root and `sim/` on the
 include path, as a shared module (`-fPIC -shared`), and export only the
-entry point and whatever a binding calls (`EMU8051_PLUGIN_EXPORT`).
+entry point and whatever a binding calls (`EMU8051_PLUGIN_EXPORT`, with
+`-fvisibility=hidden`). `-Wl,-z,defs` makes the link fail if the plugin
+calls anything that is neither in it nor in the C library.
 `tests/plugin/demo_plugin.c` is a complete one in about 450 lines; meson
 builds it as `build/demo_plugin.so` and `python/tests/test_plugin.py`
-tests the host through it.
+tests the host through it. The HC6800-ES board is another, built as
+`build/hc6800_es.so` by meson and `make sim`, and as
+`build/hc6800_es.dll` by `build_sim_windows.sh`.
 
-**What changed here for it, and why.** Only generic pieces:
+**Linking one in.** A plugin can also be compiled into a program and added
+with `sim_add_plugin(sim, init, args)`, given its init function; after
+that it is the same as a loaded one, except that `sim_plugin_path()` is
+NULL. Such a plugin gives its init a name of its own and keeps the
+exported `emu8051_plugin_init` in a file that only the shared object is
+built from, so that two of them can be linked into one program
+(`sim/boards/hc6800_es_entry.c`). A program with no dynamic loader at all
+compiles `plugin.c` with `SIM_NO_DLOPEN` defined: `sim_load_plugin()` then
+fails and says why, and nothing refers to `dlopen` or `LoadLibrary`.
+
+**What changed here for loadable plugins, and why.** Only generic pieces:
 
 - `bus.c` takes 16 subscribers per SFR instead of 4. A part built as a
   plugin puts many models on the registers they share (the ports, the
@@ -328,10 +393,36 @@ tests the host through it.
 - `struct sim` moved from `capi.c` to `sim_private.h`, shared with
   `plugin.c`; it is not part of any ABI.
 
-The core (`core.c`, `opcodes.c`, `disasm.c`), the board catalog and every
-device model are unchanged: a plugin needing a variant of a model (an
-HD44780 controller on other wiring, another IAP register layout) carries
-its own copy.
+**What changed for the board plugin, and why.** For the HC6800-ES board to
+use only the table an outside plugin gets, this needed:
+
+- `on_tick`, appended to the host table (the ABI stays 1). The board's
+  models count time in ticks of 12 clocks, and `capi.c` used to step them
+  itself in `sim_post_tick()`, which now runs the tick hooks.
+- `sim_add_plugin()` and `SIM_NO_DLOPEN`, so that one plugin source can be
+  linked in or built as a shared object.
+- `bus_create_forwarding()`: a bus whose subscriptions go to the host's
+  `on_sfr_write`/`on_sfr_read`, so the models in `sim/devices/` work in a
+  plugin with no change to their own interfaces.
+- Reset functions for the three models that reflect CPU pins
+  (`hd44780_reset()`, `hc573_reset()`, `digit_display_reset()`), so a
+  reset no longer recreates them and leaves their old subscriptions
+  behind.
+- `iap_set_reset()`: the IAP model no longer calls the core's `reset()`
+  itself; whoever creates it says how to reset the CPU (the board passes
+  the host's `reset_cpu`).
+- `capi.c` keeps no device: `struct sim` lost its device pointers, and
+  every `sim_enable_*` and device function is a call of the board's method
+  of the same name, through `sim_plugin_call()`. On a `"bare"` simulation
+  the first such call adds the linked-in board, as before; a loaded
+  `hc6800_es.so` answers them in its place.
+- pysim's `Plugin.path` is `None` for a linked-in plugin, and
+  `Plugin.lib` is the simulator library itself.
+
+The core (`core.c`, `opcodes.c`, `disasm.c`) and the board catalog are
+unchanged, and the device models changed only as listed above. A plugin
+needing a variant of a model (an HD44780 controller on other wiring,
+another IAP register layout) carries its own copy.
 
 ## Fidelity notes and the real bugs found building this
 
