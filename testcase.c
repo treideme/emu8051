@@ -94,9 +94,71 @@ void emu_exception(struct em8051 *aCPU, int aCode)
   }
 }
 
-int emu_sfrread(struct em8051 *aCPU, int aRegister)
+// load_obj() moved from core.c into emu.c upstream (3a8b5e6), so it is no
+// longer in the core library this program links. This is a copy of it.
+static int readbyte(FILE * f)
 {
-  return aCPU->mSFR[aRegister - 0x80];
+  char data[3];
+  data[0] = fgetc(f);
+  data[1] = fgetc(f);
+  data[2] = 0;
+  return strtol(data, NULL, 16);
+}
+
+static int load_hex(struct em8051 *aCPU, char *aFilename)
+{
+  FILE *f;
+  int result = -5;
+  if (aFilename == 0 || aFilename[0] == 0)
+    return -1;
+  f = fopen(aFilename, "r");
+  if (!f) return -1;
+  if (fgetc(f) != ':')
+  {
+    fclose(f);
+    return -2; // unsupported file format
+  }
+  while (!feof(f))
+  {
+    int recordlength;
+    int address;
+    int recordtype;
+    int checksum;
+    int i;
+    recordlength = readbyte(f);
+    address = readbyte(f);
+    address <<= 8;
+    address |= readbyte(f);
+    recordtype = readbyte(f);
+    if (recordtype == 1)
+    {
+      result = 0; // we're done
+      break;
+    }
+    if (recordtype != 0)
+    {
+      result = -3; // unsupported record type
+      break;
+    }
+    checksum = recordtype + recordlength + (address & 0xff) + (address >> 8); // final checksum = 1 + not(checksum)
+    for (i = 0; i < recordlength; i++)
+    {
+      int data = readbyte(f);
+      checksum += data;
+      aCPU->mCodeMem[(address + i) & aCPU->mCodeMemMaxIdx] = data;
+    }
+    i = readbyte(f);
+    checksum &= 0xff;
+    checksum = 256 - checksum;
+    if (i != (checksum & 0xff))
+    {
+      result = -4; // checksum failure
+      break;
+    }
+    while (fgetc(f) != ':' && !feof(f)) {} // skip newline
+  }
+  fclose(f);
+  return result;
 }
 
 int main(int parc, char ** pars)
@@ -105,15 +167,12 @@ int main(int parc, char ** pars)
   int ticked = 1;
 
   memset(&emu, 0, sizeof(emu));
-  emu.mCodeMem     = malloc(65536);
-  emu.mCodeMemSize = 65536;
-  emu.mExtData     = malloc(65536);
-  emu.mExtDataSize = 65536;
-  emu.mLowerData   = malloc(128);
-  emu.mUpperData   = malloc(128);
-  emu.mSFR         = malloc(128);
+  emu.mCodeMemMaxIdx = 65536-1;
+  emu.mCodeMem     = calloc(emu.mCodeMemMaxIdx+1, sizeof(unsigned char));
+  emu.mExtDataMaxIdx = 65536-1;
+  emu.mExtData     = calloc(emu.mExtDataMaxIdx+1, sizeof(unsigned char));
+  emu.mUpperData   = calloc(128, sizeof(unsigned char));
   emu.except       = &emu_exception;
-  emu.sfrread      = &emu_sfrread;
   emu.xread = NULL;
   emu.xwrite = NULL;
   reset(&emu, 1);
@@ -122,7 +181,7 @@ int main(int parc, char ** pars)
     fprintf(stderr, "Please provide a hex file for this test-case\n");
     return EXIT_FAILURE;
   }
-  if (load_obj(&emu, pars[1]) != 0)
+  if (load_hex(&emu, pars[1]) != 0)
   {
     fprintf(stderr, "File '%s' load failure\n\n",pars[1]);
     return EXIT_FAILURE;
