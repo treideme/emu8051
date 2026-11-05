@@ -8,7 +8,7 @@ mkdir -p build
 uv run --quiet --no-project --python 3.12 --with ziglang python -m ziglang cc \
   -shared -O2 -std=gnu99 -I. -target x86_64-windows-gnu -o build/libem8051sim.dll \
   core.c disasm.c opcodes.c \
-  sim/bus.c sim/capi.c sim/boards/hc6800_es.c \
+  sim/bus.c sim/capi.c sim/plugin.c sim/boards/hc6800_es.c \
   sim/devices/hd44780.c sim/devices/hc573.c sim/devices/hc138.c \
   sim/devices/digit_display.c sim/devices/ds1302.c sim/devices/xpt2046.c \
   sim/devices/servo.c sim/devices/enc28j60.c sim/devices/fan.c \
