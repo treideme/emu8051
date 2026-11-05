@@ -276,8 +276,10 @@ an interrupt entry or one instruction, timed by the cycle table (12
 clocks per machine cycle without one). The core's timers, UART,
 interrupt controller and PCON idle and power-down do not run in that
 mode; they belong to `tick()`, and a part described by a plugin has its
-own. `sim_step(ticks)` still counts 12 clocks per tick, and board
-devices are stepped once per 12 clocks, so they keep their timing. RETI
+own. `sim_step(ticks)` still counts 12 clocks per tick, and the board's
+devices (those `sim_post_tick()` steps: the LCD, DS1302, servo, fan and
+IAP) are stepped once per 12 clocks executed, however the instructions
+are timed, so they keep their timing. RETI
 is the core's and only pops the PC: a plugin that tracks priority levels
 in service watches for opcode 32h in its `after` hook. A conditional
 jump to the very next instruction lands in the same place whether it

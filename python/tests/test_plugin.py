@@ -226,6 +226,20 @@ class PluginTests(unittest.TestCase):
         s.step(10)
         self.assertEqual(s.clock_count, 29 + 120)
 
+    def test_board_devices_keep_their_timing_in_instruction_mode(self):
+        # 1T NOPs (zeroed code memory): twelve instructions per board tick
+        s, p = self.sim("1t", board="hc6800_es")
+        self.assertTrue(s.instruction_mode)
+        s.set_clock_hz(120_000)
+        s.enable_ds1302()
+        s.ds1302_set_time(second=0, minute=0, hour=0, date=1, month=1, weekday=1, year=0)
+        ticks_per_second = s.clock_hz // 12
+        s.step(ticks_per_second - 1)
+        self.assertEqual(s.ds1302_register(0), 0x00, "ticked over a second early")
+        self.assertEqual(s.instruction_count, 12 * (ticks_per_second - 1))
+        s.step(1)
+        self.assertEqual(s.ds1302_register(0), 0x01, "did not tick over on time")
+
     def test_a_jump_to_the_next_instruction_is_timed_by_whether_it_jumped(self):
         # MOV 30h,#2 / DJNZ 30h,+0 (jumps) / DJNZ 30h,+0 (falls through) / SJMP $
         prog = {0: [0x75, 0x30, 0x02, 0xD5, 0x30, 0x00, 0xD5, 0x30, 0x00, 0x80, 0xFE]}

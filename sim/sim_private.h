@@ -115,6 +115,7 @@ struct sim
     long total_instructions;
     unsigned long total_ticks;
     uint64_t total_clocks;
+    uint32_t device_clocks; // instruction mode: clocks not yet handed to sim_post_tick()
 
     stim_entry_t stim[MAX_STIM];
     int stim_count;

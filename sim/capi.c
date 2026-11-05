@@ -201,6 +201,7 @@ void sim_reset(sim_handle_t aSim)
     s->total_instructions = 0;
     s->total_ticks = 0;
     s->total_clocks = 0;
+    s->device_clocks = 0;
 
     // Recreated fresh so they don't keep showing whatever they last
     // captured from the CPU before reset -- these are pure reflections of

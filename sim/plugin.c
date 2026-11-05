@@ -457,6 +457,15 @@ static uint32_t step_instruction(struct sim *s)
 done:
     end_hooks(s, clocks, kind);
     s->total_clocks += clocks;
+    // Board devices count ticks of 12 clocks; give them one per 12 clocks
+    // executed, whatever the instructions cost (plugin.h, "The two
+    // execution modes").
+    s->device_clocks += clocks;
+    while (s->device_clocks >= 12u)
+    {
+        s->device_clocks -= 12u;
+        sim_post_tick(s);
+    }
     return clocks;
 }
 

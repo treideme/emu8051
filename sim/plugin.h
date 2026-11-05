@@ -36,7 +36,9 @@
  * is one of: a wait (a step hook's begin consumed it), an interrupt entry,
  * or one instruction. In instruction mode the core's timers, UART and
  * interrupt controller do not run at all (they are tick()'s); the plugin
- * models whatever the part has instead. That is how a plugin describes a
+ * models whatever the part has instead. The board's devices (the LCD,
+ * DS1302, servo, fan, IAP) still count in ticks: the host steps them once
+ * per 12 clocks executed, so they keep their timing. That is how a plugin describes a
  * different core, a 1T one for instance: the cycle table gives each
  * opcode's clocks, the interrupt hook its own vectors and priorities.
  *
