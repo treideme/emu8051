@@ -38,9 +38,9 @@ typedef struct
 
 typedef struct
 {
-    void *dl; // the shared object (dlopen / LoadLibrary handle)
+    void *dl; // the shared object (dlopen / LoadLibrary handle); NULL when linked in
     emu8051_plugin_t p;
-    char *path;
+    char *path; // NULL when linked in (sim_add_plugin)
     char name[48]; // p.name, made unique on this simulation; "" = inert
 } sim_plugin_t;
 
@@ -83,6 +83,12 @@ typedef struct
     emu8051_pin_fn fn;
     void *user;
 } pin_watch_t;
+
+typedef struct
+{
+    emu8051_tick_fn fn;
+    void *user;
+} tick_hook_t;
 
 struct sim
 {
@@ -145,6 +151,8 @@ struct sim
     pin_watch_t pin_watch[MAX_PIN_WATCH];
     int pin_watch_count;
     uint8_t pin_reg_watched[128];
+    tick_hook_t tick_hooks[MAX_PLUGIN_HOOKS];
+    int tick_hook_count;
 };
 
 enum

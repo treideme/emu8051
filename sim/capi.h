@@ -34,6 +34,11 @@
 
 typedef void *sim_handle_t;
 
+// For sim_add_plugin(): the two structs of sim/plugin.h, which a caller of
+// that function includes; nothing else here needs them.
+struct emu8051_host;
+struct emu8051_plugin;
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -245,6 +250,15 @@ extern "C"
     // a failed load leaves the simulation in an unknown state: close it.
     // A second plugin of a name already loaded is called "name#2", etc.
     SIM_API int sim_load_plugin(sim_handle_t aSim, const char *aPath, const char *aArgs);
+    // A plugin linked into the program: aInit is its init function, the
+    // one a shared object would export as emu8051_plugin_init (plugin.h).
+    // Otherwise as sim_load_plugin(), with no dynamic loader involved; a
+    // build with SIM_NO_DLOPEN defined has only this. sim_plugin_path() is
+    // NULL for such a plugin. SIM_PLUGIN_NO_ENTRY for a NULL aInit.
+    SIM_API int sim_add_plugin(sim_handle_t aSim,
+                               int (*aInit)(const struct emu8051_host *aHost, struct emu8051_plugin *aPlugin,
+                                            const char *aArgs),
+                               const char *aArgs);
     SIM_API const char *sim_plugin_error(sim_handle_t aSim);
     // The plugins loaded, by index (NULL past the last).
     SIM_API int sim_plugin_count(sim_handle_t aSim);
@@ -259,7 +273,8 @@ extern "C"
     // For a language binding that calls a plugin's exported functions
     // directly: the plugin's context pointer (what its functions take) and
     // the path it was loaded from (to open the same object, already loaded,
-    // e.g. with ctypes.CDLL). NULL for an unknown name.
+    // e.g. with ctypes.CDLL). NULL for an unknown name, and the path is NULL
+    // for a plugin linked in (sim_add_plugin).
     SIM_API void *sim_plugin_context(sim_handle_t aSim, const char *aName);
     SIM_API const char *sim_plugin_path(sim_handle_t aSim, const char *aName);
 

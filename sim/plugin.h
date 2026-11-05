@@ -14,6 +14,16 @@
  * caller passed to sim_load_plugin(), never NULL; its meaning is the
  * plugin's.
  *
+ * The same plugin can also be linked into a program, with no shared
+ * object and no dynamic loader: sim_add_plugin() (capi.h) takes the init
+ * function itself, and everything after that is the same. A plugin meant
+ * for both gives its init function a name of its own and keeps the
+ * exported emu8051_plugin_init, which only calls it, in a file of its own
+ * that only the shared object is built from (two plugins linked into one
+ * program cannot both define emu8051_plugin_init). sim/boards/
+ * hc6800_es_plugin.c and hc6800_es_entry.c are laid out that way; see
+ * sim/PLUGIN-TUTORIAL.md.
+ *
  * Everything the plugin does to the simulation goes through the function
  * table in emu8051_host_t, each function taking aHost->sim first. The
  * table is the whole ABI, together with struct em8051 from emu8051.h,
@@ -36,11 +46,16 @@
  * is one of: a wait (a step hook's begin consumed it), an interrupt entry,
  * or one instruction. In instruction mode the core's timers, UART and
  * interrupt controller do not run at all (they are tick()'s); the plugin
- * models whatever the part has instead. The board's devices (the LCD,
- * DS1302, servo, fan, IAP) still count in ticks: the host steps them once
- * per 12 clocks executed, so they keep their timing. That is how a plugin describes a
+ * models whatever the part has instead. That is how a plugin describes a
  * different core, a 1T one for instance: the cycle table gives each
  * opcode's clocks, the interrupt hook its own vectors and priorities.
+ *
+ * Tick hooks (on_tick) count in ticks of 12 clocks in both modes: after
+ * every tick() in tick mode, and once per 12 clocks executed in
+ * instruction mode, however the instructions are timed. A device model
+ * that counts time in machine cycles (an LCD's busy flag, an RTC) steps
+ * from one and keeps its timing on any core. Unlike an end hook, a tick
+ * hook keeps the host in its plain tick() loop.
  *
  * Everything is single-threaded and synchronous, as in capi.h: callbacks
  * run inside sim_step() and the other capi calls, never on their own.
@@ -89,6 +104,9 @@ extern "C"
 
     // A watched pin's level changed (see on_pin).
     typedef void (*emu8051_pin_fn)(void *aUser, uint8_t aPort, uint8_t aBit, int aLevel);
+
+    // One tick of 12 clocks has passed (see on_tick).
+    typedef void (*emu8051_tick_fn)(void *aUser);
 
     // Exception filter: return the code to record (sim_get_exceptions), a
     // different one to translate it, or -1 to drop it.
@@ -222,6 +240,13 @@ extern "C"
                     uint8_t *aOut, int aOutCap, int *aOutLen);
         // Why init failed, for sim_plugin_error(); call before returning.
         void (*error)(void *aSim, const char *aMessage);
+
+        // ---- added later: check for these with EMU8051_HOST_HAS
+        // Be called once per tick (see "The two execution modes" above),
+        // in the order installed, before the host counts UART output for
+        // that tick. Does not switch modes. 0, or -1 when the table is
+        // full.
+        int (*on_tick)(void *aSim, emu8051_tick_fn aFn, void *aUser);
     };
 
     // True when the host's table has member aField.

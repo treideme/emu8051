@@ -229,6 +229,7 @@ void sim_reset(sim_handle_t aSim)
 
 void sim_post_tick(struct sim *s)
 {
+    int i;
     if (s->lcd)
         hd44780_step(s->lcd);
     if (s->ds1302)
@@ -239,6 +240,8 @@ void sim_post_tick(struct sim *s)
         fan_step(s->fan);
     if (s->iap)
         iap_post_tick(s->iap);
+    for (i = 0; i < s->tick_hook_count; i++)
+        s->tick_hooks[i].fn(s->tick_hooks[i].user);
     if (s->cpu.serial_out_idx != s->last_tx_idx)
     {
         // Can only ever differ by one byte per tick (transmitting a byte

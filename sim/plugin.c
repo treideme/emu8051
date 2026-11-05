@@ -6,7 +6,10 @@
 #include <string.h>
 #include "sim_private.h"
 
-#if defined(_WIN32)
+// SIM_NO_DLOPEN: a build with no dynamic loader. sim_load_plugin() then
+// always fails, and plugins are linked in and added with sim_add_plugin().
+#if defined(SIM_NO_DLOPEN)
+#elif defined(_WIN32)
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -277,6 +280,17 @@ static int h_on_pin(void *aSim, uint8_t aPort, uint8_t aBit, emu8051_pin_fn aFn,
     return 0;
 }
 
+static int h_on_tick(void *aSim, emu8051_tick_fn aFn, void *aUser)
+{
+    struct sim *s = SIMP(aSim);
+    if (s->tick_hook_count >= MAX_PLUGIN_HOOKS || !aFn)
+        return -1;
+    s->tick_hooks[s->tick_hook_count].fn = aFn;
+    s->tick_hooks[s->tick_hook_count].user = aUser;
+    s->tick_hook_count++;
+    return 0;
+}
+
 static sim_plugin_t *plugin_named(struct sim *s, const char *aName)
 {
     int i;
@@ -330,6 +344,7 @@ void plugin_host_init(struct sim *aSim)
     h->on_pin = h_on_pin;
     h->call = h_call;
     h->error = h_error;
+    h->on_tick = h_on_tick;
 }
 
 // ------------------------------------------------------------------ hooks the host calls
@@ -457,7 +472,7 @@ static uint32_t step_instruction(struct sim *s)
 done:
     end_hooks(s, clocks, kind);
     s->total_clocks += clocks;
-    // Board devices count ticks of 12 clocks; give them one per 12 clocks
+    // Tick hooks count ticks of 12 clocks; give them one per 12 clocks
     // executed, whatever the instructions cost (plugin.h, "The two
     // execution modes").
     s->device_clocks += clocks;
@@ -494,7 +509,8 @@ static void close_dl(void *aDl)
 {
     if (!aDl)
         return;
-#if defined(_WIN32)
+#if defined(SIM_NO_DLOPEN)
+#elif defined(_WIN32)
     FreeLibrary((HMODULE)aDl);
 #else
     dlclose(aDl);
@@ -522,13 +538,60 @@ void plugin_destroy_all(struct sim *aSim)
 
 // ------------------------------------------------------------------ capi.h
 
+// Runs aInit on a fresh slot: the part of loading that is the same for a
+// shared object (aDl, aPath) and a plugin linked in (both NULL). aWhat
+// names it in error messages.
+static int attach(struct sim *s, void *aDl, emu8051_plugin_init_fn aInit, const char *aPath, const char *aWhat,
+                  const char *aArgs)
+{
+    sim_plugin_t *p = &s->plugins[s->plugin_count];
+    int rc;
+
+    memset(p, 0, sizeof(*p));
+    p->p.abi = EMU8051_PLUGIN_ABI;
+    p->p.size = (uint32_t)sizeof(p->p);
+    p->dl = aDl;
+    // From here the slot is taken even if init fails: whatever the plugin
+    // hooked in before it gave up still points into its object, so the
+    // object stays loaded, inert (no name), until sim_close().
+    s->plugin_count++;
+    rc = aInit(&s->host, &p->p, aArgs ? aArgs : "");
+    if (rc != 0)
+    {
+        if (!s->plugin_error[0])
+            snprintf(s->plugin_error, sizeof(s->plugin_error), "%s: init returned %d", aWhat, rc);
+        memset(&p->p, 0, sizeof(p->p));
+        return SIM_PLUGIN_INIT_FAILED;
+    }
+    if (p->p.abi != EMU8051_PLUGIN_ABI)
+    {
+        // Built against another header: its view of these structs cannot
+        // be trusted, so nothing more of it is called, destroy included.
+        snprintf(s->plugin_error, sizeof(s->plugin_error), "%s: built for plugin ABI %u, host has %u", aWhat,
+                 (unsigned)p->p.abi, (unsigned)EMU8051_PLUGIN_ABI);
+        memset(&p->p, 0, sizeof(p->p));
+        return SIM_PLUGIN_ABI_MISMATCH;
+    }
+    // The name the host knows it by: the plugin's, with "#2", "#3", ...
+    // appended when one of that name is already loaded here.
+    {
+        const char *base = (p->p.name && p->p.name[0]) ? p->p.name : "plugin";
+        int n = 1;
+        snprintf(p->name, sizeof(p->name), "%s", base);
+        while (plugin_named(s, p->name) != p)
+            snprintf(p->name, sizeof(p->name), "%.36s#%d", base, ++n);
+    }
+    if (aPath)
+    {
+        p->path = (char *)malloc(strlen(aPath) + 1);
+        strcpy(p->path, aPath);
+    }
+    return SIM_PLUGIN_OK;
+}
+
 int sim_load_plugin(sim_handle_t aSim, const char *aPath, const char *aArgs)
 {
     struct sim *s = SIMP(aSim);
-    sim_plugin_t *p;
-    void *dl;
-    emu8051_plugin_init_fn init;
-    int rc;
 
     if (!s || !aPath)
         return SIM_PLUGIN_OPEN_FAILED;
@@ -538,6 +601,14 @@ int sim_load_plugin(sim_handle_t aSim, const char *aPath, const char *aArgs)
         h_error(s, "too many plugins");
         return SIM_PLUGIN_TOO_MANY;
     }
+#if defined(SIM_NO_DLOPEN)
+    (void)aArgs;
+    snprintf(s->plugin_error, sizeof(s->plugin_error),
+             "cannot load %s: built without a dynamic loader (SIM_NO_DLOPEN); use sim_add_plugin()", aPath);
+    return SIM_PLUGIN_OPEN_FAILED;
+#else
+    void *dl;
+    emu8051_plugin_init_fn init;
 #if defined(_WIN32)
     dl = (void *)LoadLibraryA(aPath);
     if (!dl)
@@ -563,45 +634,27 @@ int sim_load_plugin(sim_handle_t aSim, const char *aPath, const char *aArgs)
         close_dl(dl);
         return SIM_PLUGIN_NO_ENTRY;
     }
+    return attach(s, dl, init, aPath, aPath, aArgs);
+#endif
+}
 
-    p = &s->plugins[s->plugin_count];
-    memset(p, 0, sizeof(*p));
-    p->p.abi = EMU8051_PLUGIN_ABI;
-    p->p.size = (uint32_t)sizeof(p->p);
-    p->dl = dl;
-    // From here the slot is taken even if init fails: whatever the plugin
-    // hooked in before it gave up still points into its object, so the
-    // object stays loaded, inert (no name), until sim_close().
-    s->plugin_count++;
-    rc = init(&s->host, &p->p, aArgs ? aArgs : "");
-    if (rc != 0)
+int sim_add_plugin(sim_handle_t aSim, emu8051_plugin_init_fn aInit, const char *aArgs)
+{
+    struct sim *s = SIMP(aSim);
+    if (!s)
+        return SIM_PLUGIN_OPEN_FAILED;
+    s->plugin_error[0] = 0;
+    if (!aInit)
     {
-        if (!s->plugin_error[0])
-            snprintf(s->plugin_error, sizeof(s->plugin_error), "%s: init returned %d", aPath, rc);
-        memset(&p->p, 0, sizeof(p->p));
-        return SIM_PLUGIN_INIT_FAILED;
+        h_error(s, "no init function");
+        return SIM_PLUGIN_NO_ENTRY;
     }
-    if (p->p.abi != EMU8051_PLUGIN_ABI)
+    if (s->plugin_count >= MAX_PLUGINS)
     {
-        // Built against another header: its view of these structs cannot
-        // be trusted, so nothing more of it is called, destroy included.
-        snprintf(s->plugin_error, sizeof(s->plugin_error), "%s: built for plugin ABI %u, host has %u", aPath,
-                 (unsigned)p->p.abi, (unsigned)EMU8051_PLUGIN_ABI);
-        memset(&p->p, 0, sizeof(p->p));
-        return SIM_PLUGIN_ABI_MISMATCH;
+        h_error(s, "too many plugins");
+        return SIM_PLUGIN_TOO_MANY;
     }
-    // The name the host knows it by: the plugin's, with "#2", "#3", ...
-    // appended when one of that name is already loaded here.
-    {
-        const char *base = (p->p.name && p->p.name[0]) ? p->p.name : "plugin";
-        int n = 1;
-        snprintf(p->name, sizeof(p->name), "%s", base);
-        while (plugin_named(s, p->name) != p)
-            snprintf(p->name, sizeof(p->name), "%.36s#%d", base, ++n);
-    }
-    p->path = (char *)malloc(strlen(aPath) + 1);
-    strcpy(p->path, aPath);
-    return SIM_PLUGIN_OK;
+    return attach(s, NULL, aInit, NULL, "linked-in plugin", aArgs);
 }
 
 const char *sim_plugin_error(sim_handle_t aSim)
