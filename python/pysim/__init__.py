@@ -21,7 +21,7 @@ import os
 import platform
 import sys
 
-__all__ = ["Simulator", "Exception8051", "find_library"]
+__all__ = ["Simulator", "Exception8051", "PluginError", "Plugin", "find_library"]
 
 
 def find_library():
@@ -188,8 +188,107 @@ class _CAPI:
             lib.sim_fan_get_rpm.restype = ctypes.c_int
             lib.sim_fan_get_rpm.argtypes = [HANDLE]
 
+            # plugins (sim/plugin.h)
+            S, P8, PI = ctypes.c_char_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(ctypes.c_int)
+            lib.sim_load_plugin.restype = ctypes.c_int
+            lib.sim_load_plugin.argtypes = [HANDLE, S, S]
+            lib.sim_plugin_error.restype = S
+            lib.sim_plugin_error.argtypes = [HANDLE]
+            lib.sim_plugin_count.restype = ctypes.c_int
+            lib.sim_plugin_count.argtypes = [HANDLE]
+            lib.sim_plugin_name.restype = S
+            lib.sim_plugin_name.argtypes = [HANDLE, ctypes.c_int]
+            lib.sim_plugin_call.restype = ctypes.c_int
+            lib.sim_plugin_call.argtypes = [HANDLE, S, S, P8, ctypes.c_int, P8, ctypes.c_int, PI]
+            lib.sim_plugin_context.restype = ctypes.c_void_p
+            lib.sim_plugin_context.argtypes = [HANDLE, S]
+            lib.sim_plugin_path.restype = S
+            lib.sim_plugin_path.argtypes = [HANDLE, S]
+            lib.sim_get_clock_count.restype = ctypes.c_ulonglong
+            lib.sim_get_clock_count.argtypes = [HANDLE]
+            lib.sim_instruction_mode.restype = ctypes.c_int
+            lib.sim_instruction_mode.argtypes = [HANDLE]
+
             cls._lib = lib
         return cls._lib
+
+
+class PluginError(Exception8051):
+    """A plugin did not load (code: SIM_PLUGIN_*, capi.h) or a call into
+    one failed (code: EMU8051_CALL_*, sim/plugin.h)."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+class Plugin:
+    """One loaded plugin (sim/plugin.h): its methods through call(), and,
+    for a binding that wants typed access, its exported functions through
+    function(), which passes the plugin's context first. Obtained from
+    Simulator.load_plugin() or Simulator.plugin(); valid while the
+    simulator is open."""
+
+    # EMU8051_CALL_* (sim/plugin.h)
+    CALL_OK, CALL_UNKNOWN, CALL_NO_PLUGIN, CALL_BAD_ARGS, CALL_TOO_SMALL = 0, -1, -2, -3, -4
+
+    def __init__(self, sim, name):
+        self._sim = sim
+        self.name = name
+        self._lib = None
+
+    @property
+    def path(self) -> str:
+        p = self._sim._capi.sim_plugin_path(self._sim._handle, self.name.encode())
+        return p.decode() if p is not None else None
+
+    @property
+    def context(self) -> int:
+        """The plugin's context pointer, as an int (what its exported
+        functions take first)."""
+        return self._sim._capi.sim_plugin_context(self._sim._handle, self.name.encode())
+
+    def call(self, method: str, data: bytes = b"", cap: int = 4096) -> bytes:
+        """Call one of the plugin's methods with data; returns its output.
+        A plugin that answers EMU8051_CALL_TOO_SMALL is asked again with
+        the size it wants. Raises PluginError for any other failure."""
+        data = bytes(data)
+        inbuf = (ctypes.c_ubyte * max(len(data), 1)).from_buffer_copy(data or b"\0")
+        for _ in range(2):
+            out = (ctypes.c_ubyte * max(cap, 1))()
+            n = ctypes.c_int(0)
+            rc = self._sim._capi.sim_plugin_call(self._sim._handle, self.name.encode(), method.encode(),
+                                                 inbuf, len(data), out, cap, ctypes.byref(n))
+            if rc == self.CALL_TOO_SMALL and n.value > cap:
+                cap = n.value
+                continue
+            break
+        if rc != self.CALL_OK:
+            raise PluginError(f"plugin {self.name!r} method {method!r}: error {rc}", rc)
+        return bytes(out[:n.value])
+
+    @property
+    def lib(self):
+        """The plugin's shared object, as ctypes.CDLL (the same object the
+        simulator loaded)."""
+        if self._lib is None:
+            self._lib = ctypes.CDLL(self.path)
+        return self._lib
+
+    def function(self, name: str, restype=None, argtypes=()):
+        """The plugin's exported C function name, declared with restype and
+        argtypes (not counting the leading context pointer, which is
+        passed for you)."""
+        fn = getattr(self.lib, name)
+        fn.restype = restype
+        fn.argtypes = [ctypes.c_void_p] + list(argtypes)
+        ctx = self.context
+
+        def bound(*args):
+            return fn(ctx, *args)
+
+        bound.__name__ = name
+        return bound
 
 
 class Simulator:
@@ -296,6 +395,38 @@ class Simulator:
         n = self._capi.sim_get_exceptions(self._handle, buf, 64)
         return [self.EXCEPTION_NAMES[c] if 0 <= c < len(self.EXCEPTION_NAMES)
                 else self.EXTRA_EXCEPTIONS.get(c, str(c)) for c in buf[:n]]
+
+    # --- plugins (sim/plugin.h) ---
+
+    def load_plugin(self, path: str, args: str = "") -> "Plugin":
+        """Load a plugin (a shared object) into this simulation. Raises
+        PluginError with the host's reason if it does not load."""
+        before = self._capi.sim_plugin_count(self._handle)
+        rc = self._capi.sim_load_plugin(self._handle, os.fspath(path).encode(), args.encode())
+        if rc != 0:
+            why = self._capi.sim_plugin_error(self._handle)
+            raise PluginError(f"plugin {os.fspath(path)!r} not loaded: "
+                              f"{why.decode(errors='replace') if why else rc}", rc)
+        return Plugin(self, self._capi.sim_plugin_name(self._handle, before).decode())
+
+    def plugin(self, name: str) -> "Plugin":
+        if name not in self.plugins():
+            raise KeyError(name)
+        return Plugin(self, name)
+
+    def plugins(self) -> list[str]:
+        n = self._capi.sim_plugin_count(self._handle)
+        return [self._capi.sim_plugin_name(self._handle, i).decode() for i in range(n)]
+
+    @property
+    def clock_count(self) -> int:
+        """Clocks since the last reset: 12 per tick, or what a plugin's
+        cycle table charges in instruction mode."""
+        return self._capi.sim_get_clock_count(self._handle)
+
+    @property
+    def instruction_mode(self) -> bool:
+        return bool(self._capi.sim_instruction_mode(self._handle))
 
     def set_xram_size(self, nbytes: int):
         """Record a CPU exception for any MOVX at or above nbytes (the part's

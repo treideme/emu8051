@@ -3,66 +3,9 @@
  */
 #include <stdlib.h>
 #include <string.h>
-#include "capi.h"
-#include "bus.h"
+#include "sim_private.h"
 #include "pin.h"
-#include "devices/digit_display.h"
-#include "devices/hd44780.h"
-#include "devices/ds1302.h"
-#include "devices/xpt2046.h"
-#include "devices/servo.h"
-#include "devices/enc28j60.h"
-#include "devices/fan.h"
-#include "devices/iap.h"
 #include "boards/hc6800_es.h"
-
-#define MAX_EXCEPTIONS 64
-#define MAX_STIM 16
-
-typedef struct
-{
-    int port;
-    int bit;
-    int active;
-    int value;
-} stim_entry_t;
-
-struct sim
-{
-    struct em8051 cpu; // MUST stay the first member: on_exception() casts
-                        // struct em8051* straight back to struct sim*
-                        // instead of needing a second cpu->sim registry.
-    sim_bus_t *bus;
-
-    unsigned long clock_hz;
-
-    digit_display_t *digit_display;
-    int digit_count; // remembered so sim_reset() can recreate it identically
-    hd44780_t *lcd;
-    ds1302_t *ds1302;
-    xpt2046_t *xpt2046;
-    servo_t *servo; // external peripheral, not board-catalog: see capi.h
-    enc28j60_t *enc28j60;
-    fan_t *fan;
-    iap_t *iap; // flash-programming SFRs, see devices/iap.h
-
-    int exceptions[MAX_EXCEPTIONS];
-    int exception_count;
-
-    int total_tx_count; // see sim_uart_tx_count -- cpu.serial_out_idx alone
-                         // wraps at 18 and can't tell "0 sent" from "18 sent"
-    int last_tx_idx;
-    int tx_origin; // serial_out[] slot of TX byte 0 since the last reset
-
-    long total_instructions;
-    unsigned long total_ticks;
-
-    stim_entry_t stim[MAX_STIM];
-    int stim_count;
-    int stim_port_registered[4];
-
-    unsigned long xram_size; // 0 = unchecked; see sim_set_xram_size
-};
 
 static void on_sbuf_write(struct em8051 *aCPU, uint8_t aReg, uint8_t aValue, void *aUserData)
 {
@@ -80,49 +23,62 @@ static void on_sbuf_write(struct em8051 *aCPU, uint8_t aReg, uint8_t aValue, voi
     ((struct sim *)aUserData)->cpu.serial_out_remaining_bits = 8;
 }
 
+void sim_record_exception(struct sim *s, int aCode)
+{
+    aCode = plugin_filter_exception(s, aCode);
+    if (aCode >= 0 && s->exception_count < MAX_EXCEPTIONS)
+        s->exceptions[s->exception_count++] = aCode;
+}
+
 static void on_exception(struct em8051 *aCPU, int aCode)
 {
-    struct sim *s = (struct sim *)aCPU;
-    if (s->exception_count < MAX_EXCEPTIONS)
-        s->exceptions[s->exception_count++] = aCode;
+    sim_record_exception((struct sim *)aCPU, aCode);
 }
 
 // MOVX past the part's on-chip XRAM. On an STC89 with EXTRAM=0 such an access
 // does not fault: it silently goes to the external bus, i.e. drives P0/P2 --
 // on the HC6800-ES that is the ENC28J60's SPI lines and the LEDs. So it is
 // recorded as a CPU exception rather than allowed to pass unnoticed.
+// A plugin's xdata hooks (plugin.h) come first: their ranges are not RAM.
 static uint8_t on_xread(struct em8051 *aCPU, uint16_t aAddress)
 {
-    if (aAddress >= ((struct sim *)aCPU)->xram_size)
+    struct sim *s = (struct sim *)aCPU;
+    uint8_t v;
+    if (s->xdata_hook_count && plugin_xdata_read(s, aAddress, &v))
+        return v;
+    if (s->xram_size && aAddress >= s->xram_size)
         on_exception(aCPU, SIM_EXCEPTION_XRAM_RANGE);
-    return aCPU->mExtData[aAddress];
+    return aCPU->mExtData[aAddress & aCPU->mExtDataMaxIdx];
 }
 
 static void on_xwrite(struct em8051 *aCPU, uint16_t aAddress, uint8_t aValue)
 {
-    if (aAddress >= ((struct sim *)aCPU)->xram_size)
+    struct sim *s = (struct sim *)aCPU;
+    if (s->xdata_hook_count && plugin_xdata_write(s, aAddress, aValue))
+        return;
+    if (s->xram_size && aAddress >= s->xram_size)
         on_exception(aCPU, SIM_EXCEPTION_XRAM_RANGE);
-    aCPU->mExtData[aAddress] = aValue;
+    aCPU->mExtData[aAddress & aCPU->mExtDataMaxIdx] = aValue;
 }
 
 void sim_set_xram_size(sim_handle_t aSim, unsigned long aBytes)
 {
     struct sim *s = (struct sim *)aSim;
+    int hooked = aBytes || s->xdata_hook_count;
     s->xram_size = aBytes;
-    s->cpu.xread = aBytes ? on_xread : NULL;
-    s->cpu.xwrite = aBytes ? on_xwrite : NULL;
+    s->cpu.xread = hooked ? on_xread : NULL;
+    s->cpu.xwrite = hooked ? on_xwrite : NULL;
 }
 
 static void on_stim_read(struct em8051 *aCPU, uint8_t aReg, void *aUserData, uint8_t *aOutMask, uint8_t *aOutValue)
 {
     struct sim *s = (struct sim *)aUserData;
-    int port = aReg / 0x10;
     int i;
     (void)aCPU;
 
     for (i = 0; i < s->stim_count; i++)
     {
-        if (!s->stim[i].active || s->stim[i].port != port)
+        if (!s->stim[i].active || s->stim[i].reg != aReg)
             continue;
         *aOutMask = (uint8_t)(*aOutMask | (1u << s->stim[i].bit));
         if (s->stim[i].value)
@@ -130,26 +86,57 @@ static void on_stim_read(struct em8051 *aCPU, uint8_t aReg, void *aUserData, uin
     }
 }
 
+void sim_cpu_reset(struct sim *s, int aWipe)
+{
+    reset(&s->cpu, aWipe != 0);
+    plugin_apply_ops(s); // reset() rebuilt the opcode table
+}
+
+static void notify_all_pins(struct sim *s)
+{
+    int r;
+    for (r = 0; r < 128; r++)
+        if (s->pin_reg_watched[r])
+            plugin_pins_changed(s, (uint8_t)r);
+}
+
 sim_handle_t sim_open(const char *aBoardName)
 {
     struct sim *s;
+    int board;
 
-    // Only one board catalog exists today (sim/boards/hc6800_es.*); this
-    // is the dispatch point a second board's constants would plug into.
-    if (!aBoardName || strcmp(aBoardName, "hc6800_es") != 0)
+    // Board catalogs: sim/boards/hc6800_es.*, and "bare", a plain 8051
+    // with no board at all, for plugins (plugin.h) to build a part on.
+    if (!aBoardName)
+        return NULL;
+    if (strcmp(aBoardName, "hc6800_es") == 0)
+        board = SIM_BOARD_HC6800_ES;
+    else if (strcmp(aBoardName, "bare") == 0)
+        board = SIM_BOARD_BARE;
+    else
         return NULL;
 
     s = (struct sim *)calloc(1, sizeof(struct sim));
+    s->board = board;
     s->cpu.mCodeMemMaxIdx = 65535;
     s->cpu.mCodeMem = (unsigned char *)calloc(65536, 1);
     s->cpu.mExtDataMaxIdx = 65535;
     s->cpu.mExtData = (unsigned char *)calloc(65536, 1);
     s->cpu.mUpperData = (unsigned char *)calloc(128, 1);
     s->cpu.except = on_exception;
-    s->clock_hz = HC6800_ES_XTAL_HZ; // only one board catalog exists today
+    s->clock_hz = HC6800_ES_XTAL_HZ; // bare: the same 12 MHz default
 
     s->bus = bus_create(&s->cpu);
+    if (!s->bus)
+    {
+        free(s->cpu.mCodeMem);
+        free(s->cpu.mExtData);
+        free(s->cpu.mUpperData);
+        free(s);
+        return NULL;
+    }
     bus_on_write(s->bus, REG_SBUF, on_sbuf_write, s);
+    plugin_host_init(s);
     reset(&s->cpu, 1);
     return s;
 }
@@ -159,6 +146,7 @@ void sim_close(sim_handle_t aSim)
     struct sim *s = (struct sim *)aSim;
     if (!s)
         return;
+    plugin_destroy_all(s);
     if (s->digit_display)
         digit_display_destroy(s->digit_display);
     if (s->lcd)
@@ -206,7 +194,7 @@ void sim_reset(sim_handle_t aSim)
     // at construction time (see hc573_create()), and that read needs to see
     // the *post*-reset power-on port state, not whatever was there a moment
     // ago.
-    reset(&s->cpu, 0);
+    sim_cpu_reset(s, 0);
     if (s->iap)
         iap_power_on(s->iap); // host reset = power cycle: ISPEN/SWBS clear
 
@@ -220,6 +208,8 @@ void sim_reset(sim_handle_t aSim)
     s->tx_origin = s->cpu.serial_out_idx;
     s->total_instructions = 0;
     s->total_ticks = 0;
+    s->total_clocks = 0;
+    s->device_clocks = 0;
 
     // Recreated fresh so they don't keep showing whatever they last
     // captured from the CPU before reset -- these are pure reflections of
@@ -238,9 +228,12 @@ void sim_reset(sim_handle_t aSim)
         s->lcd = NULL;
         sim_enable_lcd(aSim);
     }
+
+    plugin_reset_all(s);
+    notify_all_pins(s);
 }
 
-static void post_tick(struct sim *s)
+void sim_post_tick(struct sim *s)
 {
     if (s->lcd)
         hd44780_step(s->lcd);
@@ -265,37 +258,59 @@ static void post_tick(struct sim *s)
 long sim_step(sim_handle_t aSim, long aTicks)
 {
     struct sim *s = (struct sim *)aSim;
+    long before = s->total_instructions;
     long i;
-    long completed = 0;
 
+    if (s->instruction_mode)
+    {
+        // a tick is 12 clocks here too (plugin.h, "The two execution modes")
+        uint64_t end = s->total_clocks + (uint64_t)(aTicks > 0 ? aTicks : 0) * 12u;
+        while (s->total_clocks < end)
+            plugin_step(s);
+        return s->total_instructions - before;
+    }
+    if (s->step_hook_count)
+    {
+        for (i = 0; i < aTicks; i++)
+            plugin_step(s);
+        return s->total_instructions - before;
+    }
+    // no hooks: the plain loop, as fast as before plugins existed
     for (i = 0; i < aTicks; i++)
     {
         if (tick(&s->cpu))
-            completed++;
-        post_tick(s);
+            s->total_instructions++;
+        sim_post_tick(s);
     }
-    s->total_instructions += completed;
-    s->total_ticks += (unsigned long)aTicks;
-    return completed;
+    if (aTicks > 0)
+    {
+        s->total_ticks += (unsigned long)aTicks;
+        s->total_clocks += 12u * (uint64_t)aTicks;
+    }
+    return s->total_instructions - before;
 }
 
 long sim_step_instructions(sim_handle_t aSim, long aInstructions)
 {
     struct sim *s = (struct sim *)aSim;
-    long done = 0;
-    long ticks_used = 0;
-    long tick_budget = aInstructions * 100L; // generous safety net, see capi.h
+    long before = s->total_instructions;
+    long budget = aInstructions * 100L; // generous safety net, see capi.h
 
-    while (done < aInstructions && tick_budget-- > 0)
+    if (s->instruction_mode || s->step_hook_count)
     {
-        ticks_used++;
-        if (tick(&s->cpu))
-            done++;
-        post_tick(s);
+        while (s->total_instructions - before < aInstructions && budget-- > 0)
+            plugin_step(s);
+        return s->total_instructions - before;
     }
-    s->total_instructions += done;
-    s->total_ticks += (unsigned long)ticks_used;
-    return done;
+    while (s->total_instructions - before < aInstructions && budget-- > 0)
+    {
+        if (tick(&s->cpu))
+            s->total_instructions++;
+        sim_post_tick(s);
+        s->total_ticks++;
+        s->total_clocks += 12u;
+    }
+    return s->total_instructions - before;
 }
 
 long sim_get_instruction_count(sim_handle_t aSim)
@@ -305,7 +320,10 @@ long sim_get_instruction_count(sim_handle_t aSim)
 
 unsigned long sim_get_tick_count(sim_handle_t aSim)
 {
-    return ((struct sim *)aSim)->total_ticks;
+    struct sim *s = (struct sim *)aSim;
+    if (s->instruction_mode)
+        return (unsigned long)(s->total_clocks / 12u);
+    return s->total_ticks;
 }
 
 int sim_get_pc(sim_handle_t aSim)
@@ -338,37 +356,52 @@ int sim_peek_sfr(sim_handle_t aSim, int aAddress)
     return s->cpu.mSFR[aAddress - 0x80];
 }
 
-void sim_set_pin(sim_handle_t aSim, int aPortIndex, int aBit, int aValue)
+int sim_pin_level(struct sim *s, uint8_t aReg, uint8_t aBit)
 {
-    struct sim *s = (struct sim *)aSim;
+    int i;
+    for (i = 0; i < s->stim_count; i++)
+        if (s->stim[i].active && s->stim[i].reg == aReg && s->stim[i].bit == aBit)
+            return s->stim[i].value;
+    return (s->cpu.mSFR[aReg & 0x7F] >> (aBit & 7)) & 1;
+}
+
+void sim_drive_pin(struct sim *s, uint8_t aReg, uint8_t aBit, int aValue)
+{
     int i;
 
-    if (aPortIndex < 0 || aPortIndex > 3 || aBit < 0 || aBit > 7)
-        return;
-
+    aReg &= 0x7F;
     for (i = 0; i < s->stim_count; i++)
     {
-        if (s->stim[i].port == aPortIndex && s->stim[i].bit == aBit)
+        if (s->stim[i].reg == aReg && s->stim[i].bit == aBit)
         {
             s->stim[i].active = (aValue >= 0);
             s->stim[i].value = (aValue > 0);
+            plugin_pins_changed(s, aReg);
             return;
         }
     }
     if (aValue < 0 || s->stim_count >= MAX_STIM)
         return;
 
-    s->stim[s->stim_count].port = aPortIndex;
+    s->stim[s->stim_count].reg = aReg;
     s->stim[s->stim_count].bit = aBit;
     s->stim[s->stim_count].active = 1;
     s->stim[s->stim_count].value = (aValue > 0);
     s->stim_count++;
 
-    if (!s->stim_port_registered[aPortIndex])
+    if (!s->stim_reg_registered[aReg])
     {
-        bus_on_read(s->bus, (uint8_t)(aPortIndex * 0x10), on_stim_read, s);
-        s->stim_port_registered[aPortIndex] = 1;
+        bus_on_read(s->bus, aReg, on_stim_read, s);
+        s->stim_reg_registered[aReg] = 1;
     }
+    plugin_pins_changed(s, aReg);
+}
+
+void sim_set_pin(sim_handle_t aSim, int aPortIndex, int aBit, int aValue)
+{
+    if (aPortIndex < 0 || aPortIndex > 3 || aBit < 0 || aBit > 7)
+        return;
+    sim_drive_pin((struct sim *)aSim, (uint8_t)(aPortIndex * 0x10), (uint8_t)aBit, aValue);
 }
 
 int sim_get_pin(sim_handle_t aSim, int aPortIndex, int aBit)

@@ -9,8 +9,10 @@
  * primitive types (ints, strings, byte buffers) -- no structs cross this
  * boundary, so there's no struct-layout/padding/ABI fragility for a
  * ctypes.CDLL caller to get wrong. This is the only header a language
- * binding needs; sim/bus.h and the device models under sim/devices are the C-to-C plugin
- * surface, not meant to be bound directly from another language.
+ * binding needs; sim/bus.h and the device models under sim/devices are the
+ * in-tree C-to-C surface, and sim/plugin.h the ABI for models built outside
+ * this repository as loadable plugins (sim_load_plugin below); none of
+ * them is meant to be bound directly from another language.
  *
  * Everything here is synchronous and single-threaded: call sim_step(),
  * then query whatever you care about, then call sim_step() again. There
@@ -38,7 +40,9 @@ extern "C"
 #endif
 
     // aBoardName selects a sim/boards/* pinout catalog. Currently only
-    // "hc6800_es" exists; add more as new dev-kits show up.
+    // "hc6800_es" exists; add more as new dev-kits show up. "bare" is a
+    // plain 8051 (64 KB code and xdata, 256 bytes idata) with no board,
+    // for a plugin (sim_load_plugin) to build a part on.
     SIM_API sim_handle_t sim_open(const char *aBoardName);
     SIM_API void sim_close(sim_handle_t aSim);
 
@@ -82,6 +86,9 @@ extern "C"
     // is a convenience that instead runs until aInstructions instructions
     // have completed (capped internally at aInstructions*100 ticks as a
     // safety net -- every legal opcode completes in well under 100 ticks).
+    // In instruction mode (a plugin's cycle table, plugin.h) a tick is still
+    // 12 clocks: sim_step runs whole steps until 12*aTicks clocks have
+    // passed, and the cap is aInstructions*100 steps.
     SIM_API long sim_step(sim_handle_t aSim, long aTicks);
     SIM_API long sim_step_instructions(sim_handle_t aSim, long aInstructions);
 
@@ -222,6 +229,45 @@ extern "C"
     SIM_API long sim_iap_stat(sim_handle_t aSim, int aWhich);
     // Raw code-memory byte (what MOVC / the CPU fetch sees).
     SIM_API int sim_peek_code(sim_handle_t aSim, int aAddress);
+
+    // --- Plugins (sim/plugin.h): a shared object opened by path that adds
+    // models to this simulation through the host's function table, or
+    // turns a "bare" one into a different part altogether. aArgs is passed
+    // to the plugin's init as is (NULL = ""). Returns SIM_PLUGIN_OK or one
+    // of the codes below; sim_plugin_error() says why in words.
+#define SIM_PLUGIN_OK 0
+#define SIM_PLUGIN_OPEN_FAILED -1  // the file does not load
+#define SIM_PLUGIN_NO_ENTRY -2     // it has no emu8051_plugin_init
+#define SIM_PLUGIN_ABI_MISMATCH -3 // built against another EMU8051_PLUGIN_ABI
+#define SIM_PLUGIN_INIT_FAILED -4  // its init refused (e.g. bad aArgs)
+#define SIM_PLUGIN_TOO_MANY -5
+    // A plugin whose init failed may have hooked in before it gave up, so
+    // a failed load leaves the simulation in an unknown state: close it.
+    // A second plugin of a name already loaded is called "name#2", etc.
+    SIM_API int sim_load_plugin(sim_handle_t aSim, const char *aPath, const char *aArgs);
+    SIM_API const char *sim_plugin_error(sim_handle_t aSim);
+    // The plugins loaded, by index (NULL past the last).
+    SIM_API int sim_plugin_count(sim_handle_t aSim);
+    SIM_API const char *sim_plugin_name(sim_handle_t aSim, int aIndex);
+    // Call one of a plugin's own methods: aIn/aInLen in, up to aOutCap bytes
+    // out, *aOutLen set to what it wrote. Returns 0 (EMU8051_CALL_OK) or a
+    // negative EMU8051_CALL_* code (plugin.h). emu8051 knows nothing about
+    // the methods; each plugin documents its own.
+    SIM_API int sim_plugin_call(sim_handle_t aSim, const char *aPlugin, const char *aMethod,
+                                const unsigned char *aIn, int aInLen, unsigned char *aOut, int aOutCap,
+                                int *aOutLen);
+    // For a language binding that calls a plugin's exported functions
+    // directly: the plugin's context pointer (what its functions take) and
+    // the path it was loaded from (to open the same object, already loaded,
+    // e.g. with ctypes.CDLL). NULL for an unknown name.
+    SIM_API void *sim_plugin_context(sim_handle_t aSim, const char *aName);
+    SIM_API const char *sim_plugin_path(sim_handle_t aSim, const char *aName);
+
+    // Clocks since the last sim_reset(): 12 per tick in tick mode, the
+    // plugin's cycle table in instruction mode (plugin.h).
+    SIM_API unsigned long long sim_get_clock_count(sim_handle_t aSim);
+    // 1 once a plugin has switched the simulation to instruction mode.
+    SIM_API int sim_instruction_mode(sim_handle_t aSim);
 
 #ifdef __cplusplus
 }
