@@ -127,6 +127,14 @@ sim_handle_t sim_open(const char *aBoardName)
     s->clock_hz = HC6800_ES_XTAL_HZ; // bare: the same 12 MHz default
 
     s->bus = bus_create(&s->cpu);
+    if (!s->bus)
+    {
+        free(s->cpu.mCodeMem);
+        free(s->cpu.mExtData);
+        free(s->cpu.mUpperData);
+        free(s);
+        return NULL;
+    }
     bus_on_write(s->bus, REG_SBUF, on_sbuf_write, s);
     plugin_host_init(s);
     reset(&s->cpu, 1);

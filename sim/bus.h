@@ -63,7 +63,8 @@ typedef void (*bus_read_fn)(struct em8051 *aCPU, uint8_t aReg, void *aUserData,
 
 // Create a bus bound to aCPU. Safe to call any time before tick() starts
 // running (does not depend on reset() having run). aCPU must outlive the
-// bus.
+// bus. Any number of buses may exist at once; NULL only when out of
+// memory.
 sim_bus_t *bus_create(struct em8051 *aCPU);
 
 // Releases the bus's subscriber lists and un-registers its cpu<->bus

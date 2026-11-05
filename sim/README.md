@@ -313,10 +313,13 @@ tests the host through it.
 - `bus.c` takes 16 subscribers per SFR instead of 4. A part built as a
   plugin puts many models on the registers they share (the ports, the
   interrupt enable and priority registers, pin-switch registers), and 4
-  tripped the assertion in `bus_on_write`. Nothing else in the bus
-  changed.
-- `sim_set_pin()`'s forced pins are kept per SFR rather than per P0-P3
-  index, so that a plugin can drive pins of ports at other addresses;
+  tripped the assertion in `bus_on_write`.
+- `bus.c`: the registry that maps a CPU back to its bus grows as buses
+  are created. It had eight slots, and a ninth simulation open at once
+  asserted in `bus_create()`; a test suite that opens one simulator per
+  test and leaves some to the garbage collector reaches nine quickly.
+- `sim_set_pin()`'s forced pins are kept per SFR, where they were kept per
+  P0-P3 index, so that a plugin can drive pins of ports at other addresses;
   `sim_set_pin()` itself is unchanged, and there are 64 of them (16
   before).
 - Interrupt numbers are not limited by the host: the interrupt hook

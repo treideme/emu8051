@@ -173,6 +173,28 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(p.call("sfr_log"), b"\x02\x03\x04")
         self.assertEqual(s.exceptions(), [])
 
+    def test_more_simulations_than_the_old_bus_registry_held(self):
+        # The bus registry had eight slots, and a ninth sim_open() asserted.
+        # Twenty at once, each with its own SFR subscriber (the plugin's
+        # F9h log), and each sees only its own program's write.
+        sims = []
+        for n in range(20):
+            s, p = self.sim(program={0: [0x75, 0xF9, n, 0x80, 0xFE]})
+            sims.append((n, s, p))
+        for n, s, p in sims:
+            s.step_instructions(4)
+        for n, s, p in sims:
+            self.assertEqual(p.call("sfr_log"), bytes([n]), n)
+        # closing some and opening more reuses the freed slots
+        for n, s, p in sims[:10]:
+            s.close()
+        s, p = self.sim(program={0: [0x75, 0xF9, 0x55, 0x80, 0xFE]})
+        s.step_instructions(4)
+        self.assertEqual(p.call("sfr_log"), b"\x55")
+        for n, s2, p2 in sims[10:]:
+            s2.step_instructions(4)
+            self.assertEqual(p2.call("sfr_log"), bytes([n]), n)
+
     def test_sfr_reads(self):
         # MOV A,FAh / MOV 30h,A / MOV A,FAh / MOV 31h,A / SJMP $
         s, _ = self.sim(program={0: [0xE5, 0xFA, 0xF5, 0x30, 0xE5, 0xFA, 0xF5, 0x31, 0x80, 0xFE]})

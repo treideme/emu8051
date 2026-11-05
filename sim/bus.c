@@ -8,7 +8,6 @@
 
 #define SIM_MAX_SUBS_PER_REG 16
 #define SIM_NUM_REGS 128
-#define SIM_MAX_BUSES 8
 
 typedef struct
 {
@@ -33,17 +32,26 @@ struct sim_bus
 
 // Registry mapping a live struct em8051* back to the sim_bus_t that owns
 // it. Needed because cpu->sfrwrite/sfrread callbacks only receive
-// (cpu, register) -- no way to smuggle a "this" pointer through the
-// vendored core's callback signature otherwise.
-static sim_bus_t *g_registry[SIM_MAX_BUSES];
+// (cpu, register): the vendored core's callback signature has no room
+// for a "this" pointer. It grows as buses are created, so the number of
+// simulations open at once is not limited; the last bus found is
+// checked first, since one simulation usually runs for a while.
+static sim_bus_t **g_registry;
+static int g_registry_cap;
+static sim_bus_t *g_last;
 
 static sim_bus_t *bus_for_cpu(struct em8051 *aCPU)
 {
     int i;
-    for (i = 0; i < SIM_MAX_BUSES; i++)
+    if (g_last && g_last->cpu == aCPU)
+        return g_last;
+    for (i = 0; i < g_registry_cap; i++)
     {
         if (g_registry[i] && g_registry[i]->cpu == aCPU)
-            return g_registry[i];
+        {
+            g_last = g_registry[i];
+            return g_last;
+        }
     }
     return NULL;
 }
@@ -87,9 +95,11 @@ sim_bus_t *bus_create(struct em8051 *aCPU)
 {
     int i;
     sim_bus_t *bus = calloc(1, sizeof(sim_bus_t));
+    if (!bus)
+        return NULL;
     bus->cpu = aCPU;
 
-    for (i = 0; i < SIM_MAX_BUSES; i++)
+    for (i = 0; i < g_registry_cap; i++)
     {
         if (!g_registry[i])
         {
@@ -97,22 +107,42 @@ sim_bus_t *bus_create(struct em8051 *aCPU)
             return bus;
         }
     }
-    // Out of registry slots; still usable stand-alone (subscriptions will
-    // simply never fire, since the trampolines can't find it), but this
-    // indicates SIM_MAX_BUSES needs raising for whatever is calling this.
-    assert(0 && "bus_create: registry full, raise SIM_MAX_BUSES");
+    {
+        int cap = g_registry_cap ? g_registry_cap * 2 : 8;
+        sim_bus_t **grown = realloc(g_registry, (size_t)cap * sizeof(*grown));
+        if (!grown)
+        {
+            free(bus);
+            return NULL;
+        }
+        for (i = g_registry_cap; i < cap; i++)
+            grown[i] = NULL;
+        grown[g_registry_cap] = bus;
+        g_registry = grown;
+        g_registry_cap = cap;
+    }
     return bus;
 }
 
 void bus_destroy(sim_bus_t *aBus)
 {
-    int i;
+    int i, live = 0;
     if (!aBus)
         return;
-    for (i = 0; i < SIM_MAX_BUSES; i++)
+    if (g_last == aBus)
+        g_last = NULL;
+    for (i = 0; i < g_registry_cap; i++)
     {
         if (g_registry[i] == aBus)
             g_registry[i] = NULL;
+        live += g_registry[i] != NULL;
+    }
+    if (!live)
+    {
+        // the last one gone: give the registry back
+        free(g_registry);
+        g_registry = NULL;
+        g_registry_cap = 0;
     }
     free(aBus);
 }
