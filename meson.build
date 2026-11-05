@@ -15,6 +15,10 @@ project('emu8051', 'c',
 # building or testing any of that.
 curses_dep = dependency('curses', required : false)
 
+# sim/plugin.c opens plugins with dlopen(); on glibc before 2.34 that lives
+# in libdl, elsewhere in libc (or, on Windows, LoadLibrary in kernel32).
+dl_dep = meson.get_compiler('c').find_library('dl', required : false)
+
 app_inc = include_directories(
 	'.',
 	)
@@ -70,10 +74,12 @@ sim_library = shared_library('em8051sim',
      'sim/devices/enc28j60.c',
      'sim/devices/fan.c',
      'sim/devices/iap.c',
-     'sim/boards/hc6800_es.c'],
+     'sim/boards/hc6800_es.c',
+     'sim/plugin.c'],
     include_directories : app_inc,
     install: true,
     link_with: core_library,
+    dependencies: [dl_dep],
 )
 
 # Same core+sim code, but as a static library -- for the sim_test C
@@ -91,9 +97,11 @@ sim_library_static = static_library('em8051sim_static',
      'sim/devices/enc28j60.c',
      'sim/devices/fan.c',
      'sim/devices/iap.c',
-     'sim/boards/hc6800_es.c'],
+     'sim/boards/hc6800_es.c',
+     'sim/plugin.c'],
     include_directories : app_inc,
     link_with: core_library,
+    dependencies: [dl_dep],
 )
 
 sim_test = executable(
@@ -102,4 +110,12 @@ sim_test = executable(
     include_directories : app_inc,
     install: true,
     link_with: sim_library_static,
+)
+
+# A small plugin (sim/plugin.h) used by python/tests/test_plugin.py: it
+# touches every part of the host's function table and models nothing real.
+demo_plugin = shared_module('demo_plugin',
+    ['tests/plugin/demo_plugin.c'],
+    include_directories : app_inc,
+    name_prefix : '',
 )

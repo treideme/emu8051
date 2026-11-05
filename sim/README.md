@@ -32,13 +32,20 @@ sim/boards/hc6800_es.c           <- THIS project's pin_t/xxx_pins_t catalog for
 sim/capi.h, capi.c               <- flat C API (opaque handle, plain functions)
                                      that ties board+devices+CPU together for
                                      any external caller
+sim/plugin.h, plugin.c           <- the host side of loadable plugins: shared
+                                     objects built outside this repository
+                                     that add models, or a whole part, at run
+                                     time (see "Loadable plugins" below)
 python/pysim/                    <- ctypes wrapper over capi.h
 python/sim_gui.py                <- PySide6 live view (polls sim_step(), no
                                      callback/threading machinery)
 python/tests/                    <- unittest suite: test_hc6800_es.py (board
                                      peripherals) and test_external_peripherals.py
                                      (servo/enc28j60), both run against real
-                                     compiled .hex files from a sibling demo repo
+                                     compiled .hex files from a sibling demo repo;
+                                     test_plugin.py, against tests/plugin/
+tests/plugin/demo_plugin.c       <- a small plugin that uses every part of
+                                     plugin.h once, for test_plugin.py
 ```
 
 ## Python setup
@@ -193,6 +200,133 @@ peripheral" below), which is exactly what makes an external plugin
 possible to reuse across unrelated projects that each pick their own pin
 for it, the same way a board peripheral is reusable across boards that
 each wire it to their own pin.
+
+## Loadable plugins (`plugin.h`)
+
+The device models above are compiled into this library. A model that does
+not belong here (another vendor's part, with its own core timing,
+interrupt controller and peripheral set, or a peripheral only one project
+needs) can instead live in its own repository as a *plugin*: a shared
+object that this library opens by path at run time. The plugin builds
+against these headers (no link against this library; everything goes
+through a table of host functions), and this repository does not change
+for it.
+
+```
+sim_handle_t s = sim_open("bare");            // or "hc6800_es"
+sim_load_plugin(s, "path/to/plugin.so", "args the plugin understands");
+sim_plugin_call(s, "name", "method", in, nin, out, cap, &nout);
+```
+
+or from Python:
+
+```python
+sim = Simulator("bare")
+p = sim.load_plugin("path/to/plugin.so", "args")
+p.call("method", b"input bytes")          # -> output bytes
+f = p.function("exported_fn", ctypes.c_int, [ctypes.c_double])
+f(1.5)                                     # the plugin's context goes first
+```
+
+`"bare"` is a plain 8051 with no board: 64 KB of code and xdata, 256
+bytes of idata, nothing attached, for a plugin to build a part on.
+
+**The ABI.** The plugin exports one function, `emu8051_plugin_init(host,
+plugin, args)`. `host` is a versioned table (`abi`, `size`, then function
+pointers, each taking `host->sim` first); the plugin fills in `plugin`
+(its name, a context pointer, and `destroy`, `reset` and `call`). The
+table is the whole interface, together with `struct em8051` from
+`emu8051.h`, which `host->cpu()` hands out for direct access to
+registers, memory and the PC. `EMU8051_PLUGIN_ABI` changes when an
+existing member, or the layout of `struct em8051`, changes; new
+functions are only appended, so `EMU8051_HOST_HAS(host, member)` lets a
+plugin built against a newer header check an older host. A plugin
+refuses a host of another ABI, and the host refuses a plugin that reports
+another one after init.
+
+What the table offers, by group (`plugin.h` documents each):
+
+- CPU and memory: the CPU, memory sizes (`set_memory`: code and xdata up
+  to 64 KB, upper idata or not), loading HEX, the core's `reset()`, the
+  oscillator.
+- Exceptions: raise one, and filter (drop or translate) the core's own.
+- SFRs: read and write subscription through the bus, exactly as the
+  in-tree devices do it.
+- xdata: hooks for address ranges, ahead of the xdata array.
+- Execution: a per-opcode cycle table with a column for conditional jumps
+  that jump; replacing an opcode's handler; step hooks (`begin` before
+  each step, which may consume it without an instruction, `before` and
+  `after` each instruction, `end` after every step); an interrupt hook
+  that answers with any vector, so a plugin can have vectors past 2Bh and
+  priority rules of its own; entering a vector from a hook; one step of
+  the host's loop; clocks and instructions so far.
+- Pins: the level the CPU reads, driving a pin from outside (as
+  `sim_set_pin()` does, but on any SFR, not only P0-P3), and being told
+  when a pin's level changes.
+- Plugins: calling a method of another plugin on the same simulation;
+  reporting why init failed.
+
+**Two execution modes.** Without plugins, or with plugins that only use
+SFRs, xdata, pins and the `end` hook, the host runs `tick()` as before:
+12 clocks per machine cycle, the core's timers, UART and two-level
+interrupt controller. A plugin that sets a cycle table, a `begin`,
+`before` or `after` hook, or an interrupt hook switches the simulation
+to *instruction mode*: each step is a wait (a `begin` hook consumed it),
+an interrupt entry or one instruction, timed by the cycle table (12
+clocks per machine cycle without one). The core's timers, UART,
+interrupt controller and PCON idle and power-down do not run in that
+mode; they belong to `tick()`, and a part described by a plugin has its
+own. `sim_step(ticks)` still counts 12 clocks per tick, and board
+devices are stepped once per 12 clocks, so they keep their timing. RETI
+is the core's and only pops the PC: a plugin that tracks priority levels
+in service watches for opcode 32h in its `after` hook. A conditional
+jump to the very next instruction lands in the same place whether it
+jumps or not; for the taken column the host runs such a jump with its
+offset patched to 1 and puts the byte back.
+
+**Methods.** `sim_plugin_call()` passes bytes in and bytes out, with a
+method name, so a binding needs nothing per plugin; each plugin documents
+its own methods. A binding that wants typed functions can open the same
+object (`sim_plugin_path()`, already loaded) and call what the plugin
+exports, passing `sim_plugin_context()` first; pysim's
+`Plugin.function()` does that.
+
+**Failure.** A load can fail at `dlopen`, for a missing entry point, an
+ABI mismatch or a refusing init, and `sim_plugin_error()` says which in
+words. A plugin may have hooked in before it gave up, so its object stays
+loaded (and inert) until `sim_close()`; treat the simulation as spoilt
+and close it. A second plugin of a name already loaded is called
+`name#2`. Limits: 8 plugins per simulation, 16 hooks of each kind, 16
+xdata ranges, 64 watched pins, 64 driven pins.
+
+**Building one.** Compile with the repository root and `sim/` on the
+include path, as a shared module (`-fPIC -shared`), and export only the
+entry point and whatever a binding calls (`EMU8051_PLUGIN_EXPORT`).
+`tests/plugin/demo_plugin.c` is a complete one in about 450 lines; meson
+builds it as `build/demo_plugin.so` and `python/tests/test_plugin.py`
+tests the host through it.
+
+**What changed here for it, and why.** Only generic pieces:
+
+- `bus.c` takes 16 subscribers per SFR instead of 4. A part built as a
+  plugin puts many models on the registers they share (the ports, the
+  interrupt enable and priority registers, pin-switch registers), and 4
+  tripped the assertion in `bus_on_write`. Nothing else in the bus
+  changed.
+- `sim_set_pin()`'s forced pins are kept per SFR rather than per P0-P3
+  index, so that a plugin can drive pins of ports at other addresses;
+  `sim_set_pin()` itself is unchanged, and there are 64 of them (16
+  before).
+- Interrupt numbers are not limited by the host: the interrupt hook
+  returns a 16-bit vector, so an 8n+3 table up to interrupt 127 (3FBh) or
+  any other layout is the plugin's business.
+- `struct sim` moved from `capi.c` to `sim_private.h`, shared with
+  `plugin.c`; it is not part of any ABI.
+
+The core (`core.c`, `opcodes.c`, `disasm.c`), the board catalog and every
+device model are unchanged: a plugin needing a variant of a model (an
+HD44780 controller on other wiring, another IAP register layout) carries
+its own copy.
 
 ## Fidelity notes and the real bugs found building this
 

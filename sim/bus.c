@@ -6,7 +6,7 @@
 #include <assert.h>
 #include "bus.h"
 
-#define SIM_MAX_SUBS_PER_REG 4
+#define SIM_MAX_SUBS_PER_REG 16
 #define SIM_NUM_REGS 128
 #define SIM_MAX_BUSES 8
 
