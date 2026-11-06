@@ -238,7 +238,9 @@ class Plugin:
         self._lib = None
 
     @property
-    def path(self) -> str:
+    def path(self) -> str | None:
+        """The shared object it was loaded from; None for a plugin linked
+        into the library (the board of Simulator("hc6800_es"))."""
         p = self._sim._capi.sim_plugin_path(self._sim._handle, self.name.encode())
         return p.decode() if p is not None else None
 
@@ -270,9 +272,11 @@ class Plugin:
     @property
     def lib(self):
         """The plugin's shared object, as ctypes.CDLL (the same object the
-        simulator loaded)."""
+        simulator loaded); the simulator library itself for a plugin
+        linked into it."""
         if self._lib is None:
-            self._lib = ctypes.CDLL(self.path)
+            path = self.path
+            self._lib = ctypes.CDLL(path) if path is not None else self._sim._capi
         return self._lib
 
     def function(self, name: str, restype=None, argtypes=()):

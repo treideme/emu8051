@@ -36,6 +36,8 @@ struct iap
     int pending_reset;    // 0 none, 1 = to AP, 2 = to ISP monitor
     uint8_t keep_contr;   // ISPEN|SWBS survive a software reset
     long stats[IAP_STAT_COUNT];
+    iap_reset_fn reset;
+    void *reset_user;
 };
 
 static uint8_t reg(const iap_t *d, int aOffset)
@@ -161,6 +163,14 @@ void iap_destroy(iap_t *aIap)
     free(aIap);
 }
 
+void iap_set_reset(iap_t *aIap, iap_reset_fn aFn, void *aUser)
+{
+    if (!aIap)
+        return;
+    aIap->reset = aFn;
+    aIap->reset_user = aUser;
+}
+
 void iap_post_tick(iap_t *d)
 {
     uint8_t keep;
@@ -175,7 +185,8 @@ void iap_post_tick(iap_t *d)
     // The ROM ISP monitor is not modelled: with no ISP host answering, the
     // real one software-resets back to the AP area (EN-271 p. 37), which is
     // what happens here in both cases.
-    reset(d->cpu, 0);
+    if (d->reset)
+        d->reset(d->reset_user);
     d->cpu->mSFR[reg(d, 5)] = keep; // ISPEN/SWBS survive a software reset
     d->last_trig = 0;
 }

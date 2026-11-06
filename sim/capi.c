@@ -1,11 +1,27 @@
 /* capi.c - see capi.h
  * Copyright 2025 Thomas Reidemeister, MIT License (see devices/hc573.h)
  */
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sim_private.h"
 #include "pin.h"
-#include "boards/hc6800_es.h"
+#include "boards/hc6800_es_plugin.h"
+#include "devices/enc28j60.h" // ENC28J60_RX_DISABLED
+
+#define SIM_DEFAULT_CLOCK_HZ 12000000UL // the HC6800-ES crystal; "bare" starts at the same
+
+// The boards sim_open() knows: a name, and the plugin that is the board,
+// linked into this library (sim_add_plugin). "bare" is a plain 8051 with
+// none, for plugins (plugin.h) to build a part on.
+static const struct
+{
+    const char *name;
+    emu8051_plugin_init_fn init;
+} BOARDS[] = {
+    {"hc6800_es", hc6800_es_plugin_init},
+    {"bare", NULL},
+};
 
 static void on_sbuf_write(struct em8051 *aCPU, uint8_t aReg, uint8_t aValue, void *aUserData)
 {
@@ -103,28 +119,24 @@ static void notify_all_pins(struct sim *s)
 sim_handle_t sim_open(const char *aBoardName)
 {
     struct sim *s;
-    int board;
+    size_t board;
 
-    // Board catalogs: sim/boards/hc6800_es.*, and "bare", a plain 8051
-    // with no board at all, for plugins (plugin.h) to build a part on.
     if (!aBoardName)
         return NULL;
-    if (strcmp(aBoardName, "hc6800_es") == 0)
-        board = SIM_BOARD_HC6800_ES;
-    else if (strcmp(aBoardName, "bare") == 0)
-        board = SIM_BOARD_BARE;
-    else
+    for (board = 0; board < sizeof(BOARDS) / sizeof(BOARDS[0]); board++)
+        if (strcmp(aBoardName, BOARDS[board].name) == 0)
+            break;
+    if (board == sizeof(BOARDS) / sizeof(BOARDS[0]))
         return NULL;
 
     s = (struct sim *)calloc(1, sizeof(struct sim));
-    s->board = board;
     s->cpu.mCodeMemMaxIdx = 65535;
     s->cpu.mCodeMem = (unsigned char *)calloc(65536, 1);
     s->cpu.mExtDataMaxIdx = 65535;
     s->cpu.mExtData = (unsigned char *)calloc(65536, 1);
     s->cpu.mUpperData = (unsigned char *)calloc(128, 1);
     s->cpu.except = on_exception;
-    s->clock_hz = HC6800_ES_XTAL_HZ; // bare: the same 12 MHz default
+    s->clock_hz = SIM_DEFAULT_CLOCK_HZ;
 
     s->bus = bus_create(&s->cpu);
     if (!s->bus)
@@ -138,6 +150,13 @@ sim_handle_t sim_open(const char *aBoardName)
     bus_on_write(s->bus, REG_SBUF, on_sbuf_write, s);
     plugin_host_init(s);
     reset(&s->cpu, 1);
+    // The board, as the first plugin: nothing of it is attached until a
+    // sim_enable_* call (or its method) asks for a device.
+    if (BOARDS[board].init && sim_add_plugin(s, BOARDS[board].init, "") != SIM_PLUGIN_OK)
+    {
+        sim_close(s);
+        return NULL;
+    }
     return s;
 }
 
@@ -146,23 +165,7 @@ void sim_close(sim_handle_t aSim)
     struct sim *s = (struct sim *)aSim;
     if (!s)
         return;
-    plugin_destroy_all(s);
-    if (s->digit_display)
-        digit_display_destroy(s->digit_display);
-    if (s->lcd)
-        hd44780_destroy(s->lcd);
-    if (s->ds1302)
-        ds1302_destroy(s->ds1302);
-    if (s->xpt2046)
-        xpt2046_destroy(s->xpt2046);
-    if (s->servo)
-        servo_destroy(s->servo);
-    if (s->enc28j60)
-        enc28j60_destroy(s->enc28j60);
-    if (s->fan)
-        fan_destroy(s->fan);
-    if (s->iap)
-        iap_destroy(s->iap);
+    plugin_destroy_all(s); // the board's devices with it
     bus_destroy(s->bus);
     free(s->cpu.mCodeMem);
     free(s->cpu.mExtData);
@@ -190,13 +193,10 @@ void sim_reset(sim_handle_t aSim)
 {
     struct sim *s = (struct sim *)aSim;
 
-    // CPU first: the digit-display/LCD recreate below reads pin/port state
-    // at construction time (see hc573_create()), and that read needs to see
-    // the *post*-reset power-on port state, not whatever was there a moment
-    // ago.
+    // CPU first: the plugins' reset below (the board's digit display and
+    // LCD among them) samples pin state, and needs the post-reset power-on
+    // port state, not whatever was there a moment ago.
     sim_cpu_reset(s, 0);
-    if (s->iap)
-        iap_power_on(s->iap); // host reset = power cycle: ISPEN/SWBS clear
 
     s->exception_count = 0;
     s->total_tx_count = 0;
@@ -211,40 +211,18 @@ void sim_reset(sim_handle_t aSim)
     s->total_clocks = 0;
     s->device_clocks = 0;
 
-    // Recreated fresh so they don't keep showing whatever they last
-    // captured from the CPU before reset -- these are pure reflections of
-    // CPU port writes, not independent state. DS1302/XPT2046/sim_set_pin
-    // stimulus are deliberately left alone; see sim_reset()'s own comment
-    // in capi.h for why.
-    if (s->digit_display)
-    {
-        digit_display_destroy(s->digit_display);
-        s->digit_display = NULL;
-        sim_enable_digit_display(aSim, s->digit_count);
-    }
-    if (s->lcd)
-    {
-        hd44780_destroy(s->lcd);
-        s->lcd = NULL;
-        sim_enable_lcd(aSim);
-    }
-
+    // The board's devices are the board plugin's to reset (what starts
+    // over and what does not: capi.h, sim_reset). sim_set_pin stimulus is
+    // left alone.
     plugin_reset_all(s);
     notify_all_pins(s);
 }
 
 void sim_post_tick(struct sim *s)
 {
-    if (s->lcd)
-        hd44780_step(s->lcd);
-    if (s->ds1302)
-        ds1302_step(s->ds1302);
-    if (s->servo)
-        servo_step(s->servo);
-    if (s->fan)
-        fan_step(s->fan);
-    if (s->iap)
-        iap_post_tick(s->iap);
+    int i;
+    for (i = 0; i < s->tick_hook_count; i++)
+        s->tick_hooks[i].fn(s->tick_hooks[i].user);
     if (s->cpu.serial_out_idx != s->last_tx_idx)
     {
         // Can only ever differ by one byte per tick (transmitting a byte
@@ -425,142 +403,156 @@ int sim_get_exceptions(sim_handle_t aSim, int *aOutCodes, int aMaxCodes)
     return n;
 }
 
+// ------------------------------------------------------------------ the board's devices
+//
+// Everything from here to the UART is the board plugin's
+// (sim/boards/hc6800_es_plugin.h): each function calls the plugin method
+// of its own name through sim_plugin_call(), as any binding could.
+// sim_open("hc6800_es") adds the plugin; on any other simulation the first
+// of these calls adds it, so they work on "bare" as they always have. A
+// plugin of that name loaded from a shared object (sim_load_plugin)
+// answers them in its place.
+
+static void put32(unsigned char *aOut, int aValue)
+{
+    uint32_t v = (uint32_t)aValue;
+    aOut[0] = (unsigned char)v;
+    aOut[1] = (unsigned char)(v >> 8);
+    aOut[2] = (unsigned char)(v >> 16);
+    aOut[3] = (unsigned char)(v >> 24);
+}
+
+static int get32(const unsigned char *aIn)
+{
+    return (int)((uint32_t)aIn[0] | (uint32_t)aIn[1] << 8 | (uint32_t)aIn[2] << 16 | (uint32_t)aIn[3] << 24);
+}
+
+static int board_call(sim_handle_t aSim, const char *aMethod, const unsigned char *aIn, int aInLen,
+                      unsigned char *aOut, int aOutCap, int *aOutLen)
+{
+    int rc;
+    *aOutLen = 0;
+    if (!aSim)
+        return EMU8051_CALL_NO_PLUGIN;
+    rc = sim_plugin_call(aSim, HC6800_ES_PLUGIN_NAME, aMethod, aIn, aInLen, aOut, aOutCap, aOutLen);
+    if (rc == EMU8051_CALL_NO_PLUGIN && sim_add_plugin(aSim, hc6800_es_plugin_init, "") == SIM_PLUGIN_OK)
+        rc = sim_plugin_call(aSim, HC6800_ES_PLUGIN_NAME, aMethod, aIn, aInLen, aOut, aOutCap, aOutLen);
+    return rc;
+}
+
+// A method with aCount int arguments (the variadic ones) and an int
+// result; aFail when there is no answer.
+static int board_int(sim_handle_t aSim, const char *aMethod, int aFail, int aCount, ...)
+{
+    unsigned char in[4 * 8], out[4];
+    int i, n;
+    va_list ap;
+    va_start(ap, aCount);
+    for (i = 0; i < aCount; i++)
+        put32(in + 4 * i, va_arg(ap, int));
+    va_end(ap);
+    if (board_call(aSim, aMethod, in, 4 * aCount, out, (int)sizeof(out), &n) != EMU8051_CALL_OK || n != 4)
+        return aFail;
+    return get32(out);
+}
+
+// A method with aCount int arguments and no result: 0, or -1.
+static int board_do(sim_handle_t aSim, const char *aMethod, int aCount, ...)
+{
+    unsigned char in[4 * 8];
+    int i, n;
+    va_list ap;
+    va_start(ap, aCount);
+    for (i = 0; i < aCount; i++)
+        put32(in + 4 * i, va_arg(ap, int));
+    va_end(ap);
+    return board_call(aSim, aMethod, in, 4 * aCount, NULL, 0, &n) == EMU8051_CALL_OK ? 0 : -1;
+}
+
 int sim_enable_digit_display(sim_handle_t aSim, int aDigitCount)
 {
-    struct sim *s = (struct sim *)aSim;
-    digit_display_pins_t pins;
-    if (s->digit_display)
-        return 0;
-    pins.latch = HC6800_ES_SEG_LATCH;
-    pins.select = HC6800_ES_SEG_SELECT;
-    pins.digit_count = aDigitCount;
-    s->digit_display = digit_display_create(s->bus, &s->cpu, pins);
-    s->digit_count = aDigitCount;
-    return 0;
+    return board_do(aSim, "enable_digit_display", 1, aDigitCount);
 }
 
 int sim_digit_get_segments(sim_handle_t aSim, int aDigit)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->digit_display)
-        return 0;
-    return digit_display_get_segments(s->digit_display, aDigit);
+    return board_int(aSim, "digit_get_segments", 0, 1, aDigit);
 }
 
 int sim_digit_get_char(sim_handle_t aSim, int aDigit)
 {
-    return digit_display_decode((uint8_t)sim_digit_get_segments(aSim, aDigit));
+    return board_int(aSim, "digit_get_char", '?', 1, aDigit); // '?': what no segments decode to
 }
 
 int sim_enable_lcd(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (s->lcd)
-        return 0;
-    s->lcd = hd44780_create(s->bus, &s->cpu, HC6800_ES_LCD, s->clock_hz);
-    return 0;
+    return board_do(aSim, "enable_lcd", 0);
 }
 
 void sim_lcd_get_line(sim_handle_t aSim, int aLine, int aWidth, char *aOutBuf, int aOutBufSize)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->lcd)
-    {
-        if (aOutBufSize > 0)
-            aOutBuf[0] = '\0';
+    unsigned char in[8];
+    int n = 0;
+    if (aOutBufSize < 1)
         return;
-    }
-    hd44780_get_line(s->lcd, aLine, (uint8_t)aWidth, aOutBuf, (size_t)aOutBufSize);
+    put32(in, aLine);
+    put32(in + 4, aWidth);
+    if (board_call(aSim, "lcd_get_line", in, 8, (unsigned char *)aOutBuf, aOutBufSize - 1, &n) != EMU8051_CALL_OK ||
+        n < 0 || n > aOutBufSize - 1)
+        n = 0;
+    aOutBuf[n] = '\0';
 }
 
 int sim_enable_ds1302(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (s->ds1302)
-        return 0;
-    s->ds1302 = ds1302_create(s->bus, &s->cpu, HC6800_ES_DS1302, s->clock_hz);
-    return 0;
+    return board_do(aSim, "enable_ds1302", 0);
 }
 
 void sim_ds1302_set_time(sim_handle_t aSim, int aSeconds, int aMinutes, int aHours,
                           int aDate, int aMonth, int aWeekday, int aYear)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->ds1302)
-        return;
-    ds1302_set_time(s->ds1302, aSeconds, aMinutes, aHours, aDate, aMonth, aWeekday, aYear);
+    board_do(aSim, "ds1302_set_time", 7, aSeconds, aMinutes, aHours, aDate, aMonth, aWeekday, aYear);
 }
 
 int sim_ds1302_get_register(sim_handle_t aSim, int aRegister)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->ds1302)
-        return 0;
-    return ds1302_get_register(s->ds1302, aRegister);
+    return board_int(aSim, "ds1302_get_register", 0, 1, aRegister);
 }
 
 int sim_enable_xpt2046(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (s->xpt2046)
-        return 0;
-    s->xpt2046 = xpt2046_create(s->bus, &s->cpu, HC6800_ES_XPT2046);
-    return 0;
+    return board_do(aSim, "enable_xpt2046", 0);
 }
 
 void sim_xpt2046_set_reading(sim_handle_t aSim, int aValue12Bit)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->xpt2046)
-        return;
-    xpt2046_set_reading(s->xpt2046, (uint16_t)aValue12Bit);
+    board_do(aSim, "xpt2046_set_reading", 1, aValue12Bit);
 }
 
 void sim_xpt2046_set_channel_reading(sim_handle_t aSim, int aChannel, int aValue12Bit)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->xpt2046)
-        return;
-    xpt2046_set_channel_reading(s->xpt2046, aChannel, (uint16_t)aValue12Bit);
+    board_do(aSim, "xpt2046_set_channel_reading", 2, aChannel, aValue12Bit);
 }
 
 int sim_xpt2046_get_last_channel(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->xpt2046)
-        return -1;
-    return xpt2046_get_last_channel(s->xpt2046);
+    return board_int(aSim, "xpt2046_get_last_channel", -1, 0);
 }
 
 int sim_enable_servo(sim_handle_t aSim, int aPwmPortIndex, int aPwmBit,
                       int aPulseMinUs, int aPulseMaxUs)
 {
-    struct sim *s = (struct sim *)aSim;
-    pin_t pwm;
-    if (s->servo)
-        return 0;
-    if (aPwmPortIndex < 0 || aPwmPortIndex > 3 || aPwmBit < 0 || aPwmBit > 7)
-        return -1;
-    pwm = pin_make((uint8_t)(aPwmPortIndex * 0x10), (uint8_t)aPwmBit);
-    s->servo = servo_create(s->bus, &s->cpu, pwm, s->clock_hz,
-                             (uint16_t)aPulseMinUs, (uint16_t)aPulseMaxUs);
-    return 0;
+    return board_do(aSim, "enable_servo", 4, aPwmPortIndex, aPwmBit, aPulseMinUs, aPulseMaxUs);
 }
 
 int sim_servo_get_pulse_us(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->servo)
-        return 0;
-    return servo_get_pulse_us(s->servo);
+    return board_int(aSim, "servo_get_pulse_us", 0, 0);
 }
 
 int sim_servo_get_angle_decidegrees(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->servo)
-        return 0;
-    return servo_get_angle_decidegrees(s->servo);
+    return board_int(aSim, "servo_get_angle_decidegrees", 0, 0);
 }
 
 int sim_enable_enc28j60(sim_handle_t aSim, int aCsPort, int aCsBit,
@@ -568,128 +560,83 @@ int sim_enable_enc28j60(sim_handle_t aSim, int aCsPort, int aCsBit,
                          int aMosiPort, int aMosiBit,
                          int aMisoPort, int aMisoBit)
 {
-    struct sim *s = (struct sim *)aSim;
-    enc28j60_pins_t pins;
-    int ports[4] = {aCsPort, aSckPort, aMosiPort, aMisoPort};
-    int bits[4] = {aCsBit, aSckBit, aMosiBit, aMisoBit};
-    int i;
-    if (s->enc28j60)
-        return 0;
-    for (i = 0; i < 4; i++)
-        if (ports[i] < 0 || ports[i] > 3 || bits[i] < 0 || bits[i] > 7)
-            return -1;
-    pins.cs = pin_make((uint8_t)(aCsPort * 0x10), (uint8_t)aCsBit);
-    pins.sck = pin_make((uint8_t)(aSckPort * 0x10), (uint8_t)aSckBit);
-    pins.mosi = pin_make((uint8_t)(aMosiPort * 0x10), (uint8_t)aMosiBit);
-    pins.miso = pin_make((uint8_t)(aMisoPort * 0x10), (uint8_t)aMisoBit);
-    s->enc28j60 = enc28j60_create(s->bus, &s->cpu, pins);
-    return 0;
+    return board_do(aSim, "enable_enc28j60", 8, aCsPort, aCsBit, aSckPort, aSckBit, aMosiPort, aMosiBit, aMisoPort,
+                    aMisoBit);
 }
 
 int sim_enable_fan(sim_handle_t aSim, int aPwmPort, int aPwmBit,
                     int aTachPort, int aTachBit)
 {
-    struct sim *s = (struct sim *)aSim;
-    pin_t pwm, tach;
-    if (s->fan)
-        return 0;
-    if (aPwmPort < 0 || aPwmPort > 3 || aPwmBit < 0 || aPwmBit > 7 ||
-        aTachPort < 0 || aTachPort > 3 || aTachBit < 0 || aTachBit > 7)
-        return -1;
-    pwm = pin_make((uint8_t)(aPwmPort * 0x10), (uint8_t)aPwmBit);
-    tach = pin_make((uint8_t)(aTachPort * 0x10), (uint8_t)aTachBit);
-    s->fan = fan_create(s->bus, &s->cpu, pwm, tach, s->clock_hz);
-    return 0;
+    return board_do(aSim, "enable_fan", 4, aPwmPort, aPwmBit, aTachPort, aTachBit);
 }
 
 int sim_fan_get_duty_percent(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->fan)
-        return 0;
-    return fan_get_duty_percent(s->fan);
+    return board_int(aSim, "fan_get_duty_percent", 0, 0);
 }
 
 int sim_fan_get_rpm(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->fan)
-        return 0;
-    return fan_get_rpm(s->fan);
+    return board_int(aSim, "fan_get_rpm", 0, 0);
 }
 
 int sim_enc28j60_get_register(sim_handle_t aSim, int aBank, int aAddress)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return 0;
-    return enc28j60_get_register(s->enc28j60, aBank, aAddress);
+    return board_int(aSim, "enc28j60_get_register", 0, 2, aBank, aAddress);
 }
 
 int sim_enc28j60_get_bank(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return 0;
-    return enc28j60_get_bank(s->enc28j60);
+    return board_int(aSim, "enc28j60_get_bank", 0, 0);
 }
 
 int sim_enc28j60_get_last_opcode(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return 0;
-    return enc28j60_get_last_opcode(s->enc28j60);
+    return board_int(aSim, "enc28j60_get_last_opcode", 0, 0);
 }
 
 unsigned long sim_enc28j60_get_buffer_byte_count(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return 0;
-    return enc28j60_get_buffer_byte_count(s->enc28j60);
+    return (unsigned long)(uint32_t)board_int(aSim, "enc28j60_get_buffer_byte_count", 0, 0);
 }
 
 int sim_enc28j60_inject_rx(sim_handle_t aSim, const unsigned char *aFrame, int aLen)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
+    unsigned char out[4];
+    int n;
+    if (aLen < 0)
+        aLen = 0; // the model refuses it as too short, as it did a negative length
+    if (board_call(aSim, "enc28j60_inject_rx", aFrame, aLen, out, (int)sizeof(out), &n) != EMU8051_CALL_OK || n != 4)
         return ENC28J60_RX_DISABLED;
-    return enc28j60_inject_rx(s->enc28j60, aFrame, aLen);
+    return get32(out);
 }
 
 int sim_enc28j60_poke_buffer(sim_handle_t aSim, int aAddress, int aValue)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return -1;
-    enc28j60_poke_buffer(s->enc28j60, aAddress, aValue);
-    return 0;
+    return board_do(aSim, "enc28j60_poke_buffer", 2, aAddress, aValue);
 }
 
 int sim_enc28j60_peek_buffer(sim_handle_t aSim, int aAddress)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return -1;
-    return enc28j60_peek_buffer(s->enc28j60, aAddress);
+    return board_int(aSim, "enc28j60_peek_buffer", -1, 1, aAddress);
 }
 
 int sim_enc28j60_tx_count(sim_handle_t aSim)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return 0;
-    return enc28j60_tx_count(s->enc28j60);
+    return board_int(aSim, "enc28j60_tx_count", 0, 0);
 }
 
 int sim_enc28j60_tx_frame(sim_handle_t aSim, int aIndex, unsigned char *aOut, int aMax)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s->enc28j60)
-        return -1;
-    return enc28j60_tx_frame(s->enc28j60, aIndex, aOut, aMax);
+    unsigned char in[4];
+    int n, rc;
+    put32(in, aIndex);
+    rc = board_call(aSim, "enc28j60_tx_frame", in, 4, aOut, aMax, &n);
+    // too small: aOut holds what fitted, n is the frame's length
+    return (rc == EMU8051_CALL_OK || rc == EMU8051_CALL_TOO_SMALL) ? n : -1;
 }
+
+// ------------------------------------------------------------------ UART
 
 int sim_uart_tx_count(sim_handle_t aSim)
 {
@@ -721,27 +668,22 @@ void sim_uart_inject_rx(sim_handle_t aSim, unsigned char aByte)
 
 int sim_enable_iap(sim_handle_t aSim, int aProfile)
 {
-    struct sim *s = (struct sim *)aSim;
-    if (!s)
-        return -1;
-    if (!s->iap)
-        s->iap = iap_create(s->bus, &s->cpu, (iap_profile_t)aProfile);
-    return s->iap ? 0 : -1;
+    return board_do(aSim, "enable_iap", 1, aProfile);
 }
 
 int sim_iap_peek(sim_handle_t aSim, int aAddress)
 {
-    return iap_peek(((struct sim *)aSim)->iap, aAddress);
+    return board_int(aSim, "iap_peek", -1, 1, aAddress);
 }
 
 int sim_iap_poke(sim_handle_t aSim, int aAddress, int aValue)
 {
-    return iap_poke(((struct sim *)aSim)->iap, aAddress, aValue);
+    return board_do(aSim, "iap_poke", 2, aAddress, aValue);
 }
 
 long sim_iap_stat(sim_handle_t aSim, int aWhich)
 {
-    return iap_stat(((struct sim *)aSim)->iap, aWhich);
+    return board_int(aSim, "iap_stat", 0, 1, aWhich);
 }
 
 int sim_peek_code(sim_handle_t aSim, int aAddress)

@@ -87,6 +87,12 @@ digit_display_t *digit_display_create(sim_bus_t *aBus, struct em8051 *aCPU, digi
     return dev;
 }
 
+void digit_display_reset(digit_display_t *aDev, const struct em8051 *aCPU)
+{
+    memset(aDev->digits, 0, sizeof(aDev->digits));
+    hc573_reset(aDev->latch, aCPU);
+}
+
 void digit_display_destroy(digit_display_t *aDev)
 {
     hc573_destroy(aDev->latch);
@@ -106,7 +112,7 @@ char digit_display_decode(uint8_t aSegments)
     static const uint8_t table[16] = {
         0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07,
         0x7f, 0x6f, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71};
-    static const char chars[16] = "0123456789AbCdEF";
+    static const char chars[] = "0123456789AbCdEF";
     uint8_t masked = aSegments & 0x7f; // ignore decimal point
     int i;
     for (i = 0; i < 16; i++)

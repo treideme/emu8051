@@ -67,6 +67,21 @@ typedef void (*bus_read_fn)(struct em8051 *aCPU, uint8_t aReg, void *aUserData,
 // memory.
 sim_bus_t *bus_create(struct em8051 *aCPU);
 
+// The subscription functions of a bus that lives somewhere else, with
+// aSim as their first argument: the shape of a plugin host's
+// on_sfr_write/on_sfr_read (plugin.h).
+typedef void (*bus_subscribe_write_fn)(void *aSim, uint8_t aReg, bus_write_fn aFn, void *aUserData);
+typedef void (*bus_subscribe_read_fn)(void *aSim, uint8_t aReg, bus_read_fn aFn, void *aUserData);
+
+// A bus for device models inside a plugin: it claims no CPU slots and
+// keeps no subscribers; bus_on_write/bus_on_read pass each subscription
+// on to aOnWrite/aOnRead, so it lands on the host's bus, in order, as if
+// the device had subscribed there itself. A plugin creates one with
+//     bus_create_forwarding(host->sim, host->on_sfr_write, host->on_sfr_read)
+// and hands it to the device models' *_create functions. NULL only when
+// out of memory or a function is missing. bus_destroy() frees it.
+sim_bus_t *bus_create_forwarding(void *aSim, bus_subscribe_write_fn aOnWrite, bus_subscribe_read_fn aOnRead);
+
 // Releases the bus's subscriber lists and un-registers its cpu<->bus
 // association. Does not touch aCPU's memory. cpu->sfrwrite/sfrread slots
 // the bus had claimed are left pointing at the bus's trampoline (harmless,

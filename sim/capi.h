@@ -34,15 +34,22 @@
 
 typedef void *sim_handle_t;
 
+// For sim_add_plugin(): the two structs of sim/plugin.h, which a caller of
+// that function includes; nothing else here needs them.
+struct emu8051_host;
+struct emu8051_plugin;
+
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-    // aBoardName selects a sim/boards/* pinout catalog. Currently only
-    // "hc6800_es" exists; add more as new dev-kits show up. "bare" is a
-    // plain 8051 (64 KB code and xdata, 256 bytes idata) with no board,
-    // for a plugin (sim_load_plugin) to build a part on.
+    // aBoardName selects a board. "hc6800_es" is a plain 8051 (64 KB code
+    // and xdata, 256 bytes idata, 12 MHz) with the HC6800-ES board plugin
+    // added (sim/boards/hc6800_es_plugin.h, linked into this library): its
+    // devices are what the sim_enable_* functions below attach. "bare" is
+    // the same 8051 with no board, for a plugin (sim_load_plugin) to build
+    // a part on. NULL for any other name.
     SIM_API sim_handle_t sim_open(const char *aBoardName);
     SIM_API void sim_close(sim_handle_t aSim);
 
@@ -52,8 +59,8 @@ extern "C"
     // Resets the CPU (registers/PC/SFRs back to power-on state) and
     // anything that's purely a *reflection* of what the CPU has driven
     // onto pins (the digit display's captured segments, the LCD's DDRAM/
-    // cursor state) -- both re-created fresh so they don't show stale
-    // pre-reset content. Also zeros the instruction/tick/UART-TX counters
+    // cursor state) -- both back to their state when enabled, so they don't
+    // show stale pre-reset content -- and calls every plugin's reset. Also zeros the instruction/tick/UART-TX counters
     // and the exception log, so a caller can treat this as "start this
     // run over". Does NOT touch DS1302 (a real one is battery-backed and
     // keeps running across an MCU reset), XPT2046 (its reading is
@@ -139,6 +146,14 @@ extern "C"
     // sim_enable_*() call (idempotent -- calling again is a no-op) and
     // wired to whatever pins aBoardName's catalog says. Query/stimulus
     // functions for a peripheral that was never enabled return 0/empty.
+    //
+    // They are the board plugin's (sim/boards/hc6800_es_plugin.h): every
+    // sim_enable_* function and every device query and stimulus function
+    // here, the IAP ones included, calls the method of the same name
+    // without "sim_" of the plugin named "hc6800_es". When the simulation
+    // has none ("bare"), the first such call adds the linked-in one, so
+    // they work there too. A plugin of that name loaded from a shared
+    // object answers them in its place.
 
     SIM_API int sim_enable_digit_display(sim_handle_t aSim, int aDigitCount);
     SIM_API int sim_digit_get_segments(sim_handle_t aSim, int aDigit);
@@ -245,6 +260,15 @@ extern "C"
     // a failed load leaves the simulation in an unknown state: close it.
     // A second plugin of a name already loaded is called "name#2", etc.
     SIM_API int sim_load_plugin(sim_handle_t aSim, const char *aPath, const char *aArgs);
+    // A plugin linked into the program: aInit is its init function, the
+    // one a shared object would export as emu8051_plugin_init (plugin.h).
+    // Otherwise as sim_load_plugin(), with no dynamic loader involved; a
+    // build with SIM_NO_DLOPEN defined has only this. sim_plugin_path() is
+    // NULL for such a plugin. SIM_PLUGIN_NO_ENTRY for a NULL aInit.
+    SIM_API int sim_add_plugin(sim_handle_t aSim,
+                               int (*aInit)(const struct emu8051_host *aHost, struct emu8051_plugin *aPlugin,
+                                            const char *aArgs),
+                               const char *aArgs);
     SIM_API const char *sim_plugin_error(sim_handle_t aSim);
     // The plugins loaded, by index (NULL past the last).
     SIM_API int sim_plugin_count(sim_handle_t aSim);
@@ -259,7 +283,8 @@ extern "C"
     // For a language binding that calls a plugin's exported functions
     // directly: the plugin's context pointer (what its functions take) and
     // the path it was loaded from (to open the same object, already loaded,
-    // e.g. with ctypes.CDLL). NULL for an unknown name.
+    // e.g. with ctypes.CDLL). NULL for an unknown name, and the path is NULL
+    // for a plugin linked in (sim_add_plugin).
     SIM_API void *sim_plugin_context(sim_handle_t aSim, const char *aName);
     SIM_API const char *sim_plugin_path(sim_handle_t aSim, const char *aName);
 

@@ -238,13 +238,21 @@ static void on_e_write(struct em8051 *aCPU, uint8_t aReg, uint8_t aValue, void *
     dev->last_e = e;
 }
 
+void hd44780_reset(hd44780_t *aDev, unsigned long aClockHz)
+{
+    hd44780_pins_t pins = aDev->pins;
+    memset(aDev, 0, sizeof(*aDev));
+    aDev->pins = pins;
+    aDev->clock_hz = aClockHz;
+    aDev->dir = 1;
+    memset(aDev->ddram, 0x20, sizeof(aDev->ddram)); // power-on DDRAM reads as spaces
+}
+
 hd44780_t *hd44780_create(sim_bus_t *aBus, struct em8051 *aCPU, hd44780_pins_t aPins, unsigned long aClockHz)
 {
     hd44780_t *dev = (hd44780_t *)calloc(1, sizeof(hd44780_t));
     dev->pins = aPins;
-    dev->clock_hz = aClockHz;
-    dev->dir = 1;
-    memset(dev->ddram, 0x20, sizeof(dev->ddram)); // power-on DDRAM reads as spaces
+    hd44780_reset(dev, aClockHz);
 
     bus_on_write(aBus, dev->pins.e.reg, on_e_write, dev);
 

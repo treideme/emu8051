@@ -65,6 +65,12 @@ typedef struct hd44780 hd44780_t;
 hd44780_t *hd44780_create(sim_bus_t *aBus, struct em8051 *aCPU, hd44780_pins_t aPins, unsigned long aClockHz);
 void hd44780_destroy(hd44780_t *aDev);
 
+// Back to the state hd44780_create() leaves it in (DDRAM spaces, address
+// counter 0, 8-bit interface, not busy), timed against aClockHz from now
+// on. The bus subscriptions stay as they are: for an MCU reset, where the
+// module is still wired up and only the CPU has started over.
+void hd44780_reset(hd44780_t *aDev, unsigned long aClockHz);
+
 // Advance the busy-flag countdown. Call once per tick()/instruction, same
 // cadence aClockHz was given in.
 void hd44780_step(hd44780_t *aDev);
